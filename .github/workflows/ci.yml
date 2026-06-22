@@ -46,7 +46,9 @@ jobs:
       - name: Validate Apache vhost template
         run: |
           sudo apt-get install -y apache2 -qq
+          sudo a2enmod headers expires deflate rewrite -q
           sudo cp config/apache/vhost.conf /etc/apache2/sites-available/test.conf
+          sudo a2dissite 000-default.conf 2>/dev/null || true
           sudo a2ensite test.conf
           sudo apache2ctl configtest
           echo "✔ Apache vhost template is valid"
