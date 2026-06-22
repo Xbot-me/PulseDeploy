@@ -9,8 +9,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/var/log/server-bootstrap.log"
+# shellcheck disable=SC2034  # Used in print_banner below
 BOOTSTRAP_VERSION="1.0.0"
-# shellcheck disable=SC2034  # Used in print_banner heredoc
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -26,7 +26,7 @@ section() { echo -e "\n${BOLD}${BLUE}━━━ $* ━━━${RESET}\n" | tee -a 
 # ── Banner ────────────────────────────────────────────────────────────────────
 print_banner() {
   echo -e "${BOLD}${CYAN}"
-  cat <<'EOF'
+  cat <<EOF
   ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗
   ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗
   ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝
@@ -50,11 +50,11 @@ detect_os() {
     source /etc/os-release
     OS_ID="${ID}"
     OS_VERSION="${VERSION_ID:-unknown}"
-    OS_LIKE="${ID_LIKE:-}"
   else
     error "Cannot detect OS. /etc/os-release not found."
   fi
 
+  # shellcheck disable=SC2034  # PKG_MANAGER used by sourced OS modules
   case "$OS_ID" in
     ubuntu)
       PKG_MANAGER="apt"
@@ -166,7 +166,7 @@ run_install() {
     none) info "Skipping stack installation." ;;
   esac
 
-  # shellcheck disable=SC1091
+  # shellcheck disable=SC1091  # Sourced scripts resolved at runtime
   # Services
   [[ "${SERVICES[swap]}"     -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/swap.sh";     setup_swap;    }
   [[ "${SERVICES[firewall]}" -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/firewall.sh"; setup_firewall; }

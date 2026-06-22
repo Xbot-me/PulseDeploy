@@ -50,7 +50,7 @@ tune_php_fpm() {
   [[ $OPCACHE_MEM -lt 64  ]] && OPCACHE_MEM=64
   [[ $OPCACHE_MEM -gt 256 ]] && OPCACHE_MEM=256
 
-  cat > /etc/php/${PHP_VER}/mods-available/opcache.ini 2>/dev/null || \
+  cat > "/etc/php/${PHP_VER}/mods-available/opcache.ini" 2>/dev/null || \
   cat > /tmp/opcache-tune.ini <<OPCACHE
 opcache.enable=1
 opcache.enable_cli=0
