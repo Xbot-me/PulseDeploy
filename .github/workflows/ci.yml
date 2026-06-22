@@ -1,0 +1,82 @@
+name: CI — Lint & Validate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck — Bash Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint bootstrap.sh
+        run: shellcheck bootstrap.sh
+
+      - name: Lint all service scripts
+        run: |
+          find scripts/ -name "*.sh" | xargs shellcheck
+
+  validate-configs:
+    name: Validate Config Templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nginx
+        run: sudo apt-get install -y nginx
+
+      - name: Validate Nginx config template
+        run: |
+          # Replace placeholder before testing
+          sed 's|PHP_FPM_SOCK|/var/run/php/php8.2-fpm.sock|g' \
+            config/nginx/default.conf > /tmp/nginx-test.conf
+          sudo cp /tmp/nginx-test.conf /etc/nginx/conf.d/test.conf
+          sudo nginx -t
+
+  structure-check:
+    name: Repo Structure Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          required_files=(
+            "bootstrap.sh"
+            "README.md"
+            "scripts/os/ubuntu.sh"
+            "scripts/os/debian.sh"
+            "scripts/os/amazon_linux.sh"
+            "scripts/os/centos_rocky.sh"
+            "scripts/stacks/lemp.sh"
+            "scripts/stacks/lamp.sh"
+            "scripts/stacks/node.sh"
+            "scripts/services/firewall.sh"
+            "scripts/services/redis.sh"
+            "scripts/services/docker.sh"
+            "scripts/services/certbot.sh"
+            "scripts/services/swap.sh"
+            "scripts/services/php_tune.sh"
+            "config/nginx/default.conf"
+            "config/apache/vhost.conf"
+          )
+          for f in "${required_files[@]}"; do
+            [[ -f "$f" ]] || { echo "MISSING: $f"; exit 1; }
+            echo "✔ $f"
+          done
+
+      - name: Check all scripts are executable
+        run: |
+          find scripts/ -name "*.sh" | while read -r f; do
+            if [[ ! -x "$f" ]]; then
+              echo "NOT EXECUTABLE: $f"
+              exit 1
+            fi
+          done || echo "Note: chmod +x not set (fix with: chmod +x scripts/**/*.sh)"
