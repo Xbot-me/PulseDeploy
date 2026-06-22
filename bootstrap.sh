@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/var/log/server-bootstrap.log"
 BOOTSTRAP_VERSION="1.0.0"
+# shellcheck disable=SC2034  # Used in print_banner heredoc
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -57,18 +58,22 @@ detect_os() {
   case "$OS_ID" in
     ubuntu)
       PKG_MANAGER="apt"
+      # shellcheck disable=SC1091
       source "$SCRIPT_DIR/scripts/os/ubuntu.sh"
       ;;
     debian)
       PKG_MANAGER="apt"
+      # shellcheck disable=SC1091
       source "$SCRIPT_DIR/scripts/os/debian.sh"
       ;;
     amzn)
       PKG_MANAGER="dnf"
+      # shellcheck disable=SC1091
       source "$SCRIPT_DIR/scripts/os/amazon_linux.sh"
       ;;
     centos|rocky|rhel|almalinux)
       PKG_MANAGER="dnf"
+      # shellcheck disable=SC1091
       source "$SCRIPT_DIR/scripts/os/centos_rocky.sh"
       ;;
     *)
@@ -153,6 +158,7 @@ run_install() {
   os_install_base
 
   # Stack
+  # shellcheck disable=SC1091
   case "$STACK" in
     lemp) source "$SCRIPT_DIR/scripts/stacks/lemp.sh";  install_lemp  ;;
     lamp) source "$SCRIPT_DIR/scripts/stacks/lamp.sh";  install_lamp  ;;
@@ -160,6 +166,7 @@ run_install() {
     none) info "Skipping stack installation." ;;
   esac
 
+  # shellcheck disable=SC1091
   # Services
   [[ "${SERVICES[swap]}"     -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/swap.sh";     setup_swap;    }
   [[ "${SERVICES[firewall]}" -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/firewall.sh"; setup_firewall; }

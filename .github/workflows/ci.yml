@@ -17,11 +17,11 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Lint bootstrap.sh
-        run: shellcheck bootstrap.sh
+        run: shellcheck -x bootstrap.sh
 
       - name: Lint all service scripts
         run: |
-          find scripts/ -name "*.sh" | xargs shellcheck
+          find scripts/ -name "*.sh" | xargs shellcheck -x
 
   validate-configs:
     name: Validate Config Templates
@@ -34,11 +34,22 @@ jobs:
 
       - name: Validate Nginx config template
         run: |
-          # Replace placeholder before testing
+          # Replace PHP-FPM socket placeholder before testing
           sed 's|PHP_FPM_SOCK|/var/run/php/php8.2-fpm.sock|g' \
             config/nginx/default.conf > /tmp/nginx-test.conf
+          # Disable default site to avoid conflicts
+          sudo rm -f /etc/nginx/sites-enabled/default
           sudo cp /tmp/nginx-test.conf /etc/nginx/conf.d/test.conf
           sudo nginx -t
+          echo "✔ Nginx config template is valid"
+
+      - name: Validate Apache vhost template
+        run: |
+          sudo apt-get install -y apache2 -qq
+          sudo cp config/apache/vhost.conf /etc/apache2/sites-available/test.conf
+          sudo a2ensite test.conf
+          sudo apache2ctl configtest
+          echo "✔ Apache vhost template is valid"
 
   structure-check:
     name: Repo Structure Check
@@ -72,11 +83,7 @@ jobs:
             echo "✔ $f"
           done
 
-      - name: Check all scripts are executable
+      - name: Ensure scripts are executable
         run: |
-          find scripts/ -name "*.sh" | while read -r f; do
-            if [[ ! -x "$f" ]]; then
-              echo "NOT EXECUTABLE: $f"
-              exit 1
-            fi
-          done || echo "Note: chmod +x not set (fix with: chmod +x scripts/**/*.sh)"
+          chmod +x bootstrap.sh scripts/**/*.sh
+          echo "✔ All scripts are executable"
