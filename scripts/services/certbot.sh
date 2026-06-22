@@ -7,7 +7,8 @@ install_certbot() {
   case "$PKG_MANAGER" in
     apt)
       os_pkg_install snapd 2>/dev/null || true
-      snap install core 2>/dev/null && snap refresh core 2>/dev/null || true
+      snap install core 2>/dev/null || true
+      snap refresh core 2>/dev/null || true
       snap install --classic certbot 2>/dev/null || os_pkg_install certbot python3-certbot-nginx python3-certbot-apache
       ln -sf /snap/bin/certbot /usr/local/bin/certbot 2>/dev/null || true
       ;;
