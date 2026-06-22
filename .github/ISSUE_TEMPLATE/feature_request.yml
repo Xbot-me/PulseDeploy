@@ -1,0 +1,48 @@
+name: Feature Request
+description: Suggest a new stack, service, distro, or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea to make PulseDeploy better? Fill this out and we'll take a look.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type of request
+      options:
+        - New Linux distro support
+        - New stack (e.g. PostgreSQL, Caddy)
+        - New service module
+        - Improvement to existing script
+        - CI/CD improvement
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or pain point
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you implement this? Any scripts, commands, or configs in mind?
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you thought about?
+    validations:
+      required: false
