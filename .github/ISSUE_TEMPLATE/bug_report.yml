@@ -1,0 +1,87 @@
+name: Bug Report
+description: Something broke during or after running PulseDeploy
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill out as much detail as possible so we can reproduce and fix the issue quickly.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Ubuntu 20.04
+        - Ubuntu 22.04
+        - Ubuntu 24.04
+        - Debian 11
+        - Debian 12
+        - Amazon Linux 2
+        - Amazon Linux 2023
+        - CentOS 8
+        - Rocky Linux 8
+        - Rocky Linux 9
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stack
+    attributes:
+      label: Stack Selected
+      options:
+        - LEMP (Nginx + PHP-FPM + MySQL)
+        - LAMP (Apache + PHP + MySQL)
+        - Node.js + PM2 + Nginx
+        - Core only (no stack)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: services
+    attributes:
+      label: Services enabled
+      options:
+        - label: Redis
+        - label: Docker & Compose
+        - label: Firewall (UFW/firewalld + fail2ban)
+        - label: Certbot (SSL)
+        - label: Swap
+        - label: PHP-FPM tuning
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / log
+      description: Paste relevant output from `/var/log/server-bootstrap.log` or the terminal
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
