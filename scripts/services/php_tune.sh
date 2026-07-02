@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Service: PHP-FPM performance tuning
-
 tune_php_fpm() {
   section "PHP-FPM Performance Tuning"
 
@@ -22,7 +21,6 @@ tune_php_fpm() {
   [[ $PM_MIN_SPARE -lt 2 ]] && PM_MIN_SPARE=2
   PM_MAX_SPARE=$(( PM_MAX_CHILDREN / 2 ))
   [[ $PM_MAX_SPARE -lt 4 ]] && PM_MAX_SPARE=4
-
   info "RAM: ${RAM_MB}MB → pm.max_children=${PM_MAX_CHILDREN}, start=${PM_START}"
 
   # Find pool config
@@ -32,16 +30,25 @@ tune_php_fpm() {
 
   if [[ -f "$POOL_CONF" ]]; then
     cp "$POOL_CONF" "${POOL_CONF}.bak"
-    sed -i "s|^pm = .*|pm = dynamic|"                                          "$POOL_CONF"
-    sed -i "s|^pm.max_children = .*|pm.max_children = ${PM_MAX_CHILDREN}|"    "$POOL_CONF"
-    sed -i "s|^pm.start_servers = .*|pm.start_servers = ${PM_START}|"         "$POOL_CONF"
+    sed -i "s|^pm = .*|pm = dynamic|"                                             "$POOL_CONF"
+    sed -i "s|^pm.max_children = .*|pm.max_children = ${PM_MAX_CHILDREN}|"        "$POOL_CONF"
+    sed -i "s|^pm.start_servers = .*|pm.start_servers = ${PM_START}|"             "$POOL_CONF"
     sed -i "s|^pm.min_spare_servers = .*|pm.min_spare_servers = ${PM_MIN_SPARE}|" "$POOL_CONF"
     sed -i "s|^pm.max_spare_servers = .*|pm.max_spare_servers = ${PM_MAX_SPARE}|" "$POOL_CONF"
-    sed -i "s|^;pm.max_requests = .*|pm.max_requests = 500|"                  "$POOL_CONF"
+    sed -i "s|^;pm.max_requests = .*|pm.max_requests = 500|"                      "$POOL_CONF"
     log "PHP-FPM pool tuned in $POOL_CONF"
   fi
 
   # ── OPcache config ────────────────────────────────────────────────────────
+  # FIX: the previous version used
+  #   cat > "$primary_path" 2>/dev/null || cat > "$fallback_path" <<EOF ... EOF
+  # The heredoc only binds to the SECOND `cat`, so the first `cat` (the one
+  # that actually runs in almost every case, since the mods-available dir
+  # normally exists right after installing PHP) had no input at all. That
+  # either hangs the whole bootstrap waiting on stdin, or silently writes an
+  # empty opcache.ini depending on how stdin is wired up when the script runs.
+  # Fixed by deciding the target path FIRST, then writing to it with a single
+  # heredoc that's unambiguously attached to one command.
   local OPCACHE_CONF
   OPCACHE_CONF=$(find /etc/php -name "opcache.ini" 2>/dev/null | head -1)
   [[ -z "$OPCACHE_CONF" ]] && OPCACHE_CONF="/etc/php/${PHP_VER}/mods-available/opcache.ini"
@@ -50,8 +57,14 @@ tune_php_fpm() {
   [[ $OPCACHE_MEM -lt 64  ]] && OPCACHE_MEM=64
   [[ $OPCACHE_MEM -gt 256 ]] && OPCACHE_MEM=256
 
-  cat > "/etc/php/${PHP_VER}/mods-available/opcache.ini" 2>/dev/null || \
-  cat > /tmp/opcache-tune.ini <<OPCACHE
+  local OPCACHE_TARGET="$OPCACHE_CONF"
+  if [[ ! -d "$(dirname "$OPCACHE_CONF")" ]]; then
+    OPCACHE_TARGET="/tmp/opcache-tune.ini"
+    warn "PHP mods-available dir not found — writing tuned config to $OPCACHE_TARGET instead"
+    warn "Copy it into place manually, e.g.: sudo cp $OPCACHE_TARGET /etc/php/${PHP_VER}/mods-available/opcache.ini && sudo phpenmod opcache"
+  fi
+
+  cat > "$OPCACHE_TARGET" <<OPCACHE
 opcache.enable=1
 opcache.enable_cli=0
 opcache.memory_consumption=${OPCACHE_MEM}
@@ -62,24 +75,24 @@ opcache.fast_shutdown=1
 opcache.jit_buffer_size=64M
 opcache.jit=tracing
 OPCACHE
-
-  log "OPcache tuned: ${OPCACHE_MEM}MB memory + JIT tracing enabled"
+  log "OPcache tuned: ${OPCACHE_MEM}MB memory + JIT tracing enabled (${OPCACHE_TARGET})"
 
   # ── PHP.ini hardening ─────────────────────────────────────────────────────
   local PHP_INI
   PHP_INI=$(find /etc/php -name "php.ini" -path "*/fpm/*" 2>/dev/null | head -1)
   if [[ -f "$PHP_INI" ]]; then
     cp "$PHP_INI" "${PHP_INI}.bak"
-    sed -i 's|^expose_php = .*|expose_php = Off|'          "$PHP_INI"
+    sed -i 's|^expose_php = .*|expose_php = Off|'                 "$PHP_INI"
     sed -i 's|^upload_max_filesize = .*|upload_max_filesize = 64M|' "$PHP_INI"
-    sed -i 's|^post_max_size = .*|post_max_size = 64M|'   "$PHP_INI"
-    sed -i 's|^max_execution_time = .*|max_execution_time = 300|' "$PHP_INI"
-    sed -i 's|^memory_limit = .*|memory_limit = 256M|'    "$PHP_INI"
+    sed -i 's|^post_max_size = .*|post_max_size = 64M|'            "$PHP_INI"
+    sed -i 's|^max_execution_time = .*|max_execution_time = 300|'  "$PHP_INI"
+    sed -i 's|^memory_limit = .*|memory_limit = 256M|'             "$PHP_INI"
     log "PHP.ini hardened (expose_php off, memory 256M, upload 64M)"
   fi
 
   # Restart PHP-FPM
   systemctl restart "php${PHP_VER}-fpm" 2>/dev/null || \
-  systemctl restart php-fpm 2>/dev/null || true
+    systemctl restart php-fpm 2>/dev/null || true
   log "PHP-FPM restarted"
+  return 0
 }
