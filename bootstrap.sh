@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/var/log/server-bootstrap.log"
 # shellcheck disable=SC2034  # Used in print_banner below
-BOOTSTRAP_VERSION="1.1.0"
+BOOTSTRAP_VERSION="1.1.1"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -22,6 +22,28 @@ warn()    { echo -e "${YELLOW}[⚠]${RESET} $*" | tee -a "$LOG_FILE"; }
 error()   { echo -e "${RED}[✘]${RESET} $*" | tee -a "$LOG_FILE"; exit 1; }
 info()    { echo -e "${CYAN}[i]${RESET} $*" | tee -a "$LOG_FILE"; }
 section() { echo -e "\n${BOLD}${BLUE}━━━ $* ━━━${RESET}\n" | tee -a "$LOG_FILE"; }
+
+# ── Global error trap ──────────────────────────────────────────────────────────
+# Fires on ANY command failure that would trigger `set -e` (i.e. exactly the
+# ones that used to kill the script silently). Prints what failed, where, and
+# in which function, both to the terminal and to the log file, before exiting.
+handle_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local last_cmd="$3"
+  local func_name="${FUNCNAME[2]:-main}"
+
+  echo -e "\n${RED}${BOLD}✘ PulseDeploy failed${RESET}" | tee -a "$LOG_FILE"
+  echo -e "${RED}  Function   :${RESET} $func_name"          | tee -a "$LOG_FILE"
+  echo -e "${RED}  Line       :${RESET} $line_no"            | tee -a "$LOG_FILE"
+  echo -e "${RED}  Command    :${RESET} $last_cmd"           | tee -a "$LOG_FILE"
+  echo -e "${RED}  Exit code  :${RESET} $exit_code"          | tee -a "$LOG_FILE"
+  echo -e "${RED}  Log file   :${RESET} $LOG_FILE"           | tee -a "$LOG_FILE"
+  echo -e "${YELLOW}  This is where the script actually stopped — nothing after this line ran.${RESET}\n"
+
+  exit "$exit_code"
+}
+trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR
 
 # ── Defaults (overridden by flags / env vars) ─────────────────────────────────
 STACK="${PULSE_STACK:-}"
@@ -121,7 +143,7 @@ ${BOLD}BEHAVIOUR${RESET}
   -y, --non-interactive     Skip all prompts; use flag values or defaults
                             Env: PULSE_NON_INTERACTIVE=1
   -h, --help                Show this help message and exit
-  -v, --version             Show version and exit
+  -v, --version              Show version and exit
 
 ${BOLD}EXAMPLES${RESET}
   # Interactive wizard (default)
@@ -165,7 +187,7 @@ parse_args() {
     case "$1" in
       -s|--stack)              STACK="$2";            shift 2 ;;
       -P|--php)                PHP_VER="$2";          shift 2 ;;
-      -N|--node)               NODE_VER="$2";         shift 2 ;;
+      -N|--node)                NODE_VER="$2";         shift 2 ;;
       -S|--services)           SERVICES_RAW="$2";     shift 2 ;;
          --domain)             DOMAIN="$2";           shift 2 ;;
          --email)              EMAIL="$2";            shift 2 ;;
@@ -183,11 +205,12 @@ parse_args() {
       *) warn "Unknown flag: $1 — run --help for usage"; shift ;;
     esac
   done
+  return 0
 }
 
 # ── Parse services list ───────────────────────────────────────────────────────
 parse_services() {
-  [[ -z "$SERVICES_RAW" ]] && return
+  [[ -z "$SERVICES_RAW" ]] && return 0
   IFS=',' read -ra SVC_LIST <<< "$SERVICES_RAW"
   for svc in "${SVC_LIST[@]}"; do
     svc="${svc// /}"  # trim spaces
@@ -196,6 +219,7 @@ parse_services() {
       *) warn "Unknown service: '$svc'. Valid: redis,docker,firewall,certbot,swap,phptune" ;;
     esac
   done
+  return 0
 }
 
 # ── Apply server config flags ─────────────────────────────────────────────────
@@ -220,11 +244,12 @@ apply_server_config() {
     log "Root SSH login disabled"
     warn "Ensure you have a sudo user before your next SSH session!"
   fi
+  return 0
 }
 
 # ── Create DB + user after MySQL install ──────────────────────────────────────
 create_database() {
-  [[ -z "$DB_NAME" && -z "$DB_USER" ]] && return
+  [[ -z "$DB_NAME" && -z "$DB_USER" ]] && return 0
 
   local DB_PASS
   DB_PASS=$(tr -dc 'A-Za-z0-9!@#$%' </dev/urandom | head -c 20)
@@ -250,11 +275,13 @@ database=${DB_NAME}
 CREDS
     log "DB user created: $DB_USER — credentials appended to /root/.my.cnf"
   fi
+  return 0
 }
 
 # ── Root check ────────────────────────────────────────────────────────────────
 check_root() {
   [[ $EUID -eq 0 ]] || error "This script must be run as root. Use: sudo bash bootstrap.sh"
+  return 0
 }
 
 # ── OS Detection ──────────────────────────────────────────────────────────────
@@ -296,11 +323,15 @@ detect_os() {
   esac
 
   log "Detected OS: $OS_ID $OS_VERSION"
+  return 0
 }
 
 # ── Interactive: Stack selection ──────────────────────────────────────────────
 select_stack() {
-  [[ -n "$STACK" ]] && { log "Stack (from flag): $STACK"; return; }
+  if [[ -n "$STACK" ]]; then
+    log "Stack (from flag): $STACK"
+    return 0
+  fi
 
   section "Stack Selection"
   echo -e "Choose a server stack to install:\n"
@@ -320,18 +351,28 @@ select_stack() {
   esac
 
   log "Stack selected: $STACK"
+  return 0
 }
 
 # ── Interactive: Service selection ────────────────────────────────────────────
+# FIX: this function used to end on a bare `[[ cond ]] && cmd && cmd` line.
+# When STACK wasn't lemp/lamp, that final test was false, its non-zero status
+# became this function's return status, and since select_services() is called
+# as a plain command in main() (not inside if/&&), `set -e` silently killed
+# the entire script right here — before confirm_install or run_install ever
+# ran, so NONE of the selected services (Docker included) were ever installed.
+# Every code path below now explicitly `return 0`s.
 select_services() {
   # If services were passed via flag/env, skip interactive
   if [[ -n "$SERVICES_RAW" ]]; then
     parse_services
     log "Services (from flag): $SERVICES_RAW"
-    return
+    return 0
   fi
 
-  [[ "$NON_INTERACTIVE" -eq 1 ]] && return
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    return 0
+  fi
 
   section "Optional Services"
 
@@ -340,8 +381,12 @@ select_services() {
   ask_yes_no "Configure firewall + fail2ban?"     && SERVICES[firewall]=1
   ask_yes_no "Install Certbot (SSL)?"             && SERVICES[certbot]=1
   ask_yes_no "Configure swap file?"               && SERVICES[swap]=1
-  [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && \
+
+  if [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]]; then
     ask_yes_no "Apply PHP-FPM performance tuning?" && SERVICES[phptune]=1
+  fi
+
+  return 0
 }
 
 ask_yes_no() {
@@ -377,11 +422,12 @@ confirm_install() {
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     log "Non-interactive mode — proceeding automatically"
-    return
+    return 0
   fi
 
   read -rp "$(echo -e "${BOLD}Proceed with installation? [y/N]:${RESET} ")" CONFIRM
   [[ "${CONFIRM,,}" == "y" || "${CONFIRM,,}" == "yes" ]] || error "Installation aborted by user."
+  return 0
 }
 
 svc_label() {
@@ -398,6 +444,7 @@ export_flags() {
   export PULSE_EMAIL="$EMAIL"
   export PULSE_SSH_PORT="$SSH_PORT"
   export PULSE_SWAP_SIZE="$SWAP_SIZE"
+  return 0
 }
 
 # ── Run installation ──────────────────────────────────────────────────────────
@@ -423,19 +470,22 @@ run_install() {
   esac
 
   # Create DB if flags were set
-  [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && create_database
+  if [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]]; then
+    create_database
+  fi
 
   # shellcheck disable=SC1091
-  [[ "${SERVICES[swap]}"     -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/swap.sh";     setup_swap;     }
-  [[ "${SERVICES[firewall]}" -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/firewall.sh"; setup_firewall; }
-  [[ "${SERVICES[redis]}"    -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/redis.sh";    install_redis;  }
-  [[ "${SERVICES[docker]}"   -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/docker.sh";   install_docker; }
-  [[ "${SERVICES[certbot]}"  -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/certbot.sh";  install_certbot; }
-  [[ "${SERVICES[phptune]}"  -eq 1 ]] && { source "$SCRIPT_DIR/scripts/services/php_tune.sh"; tune_php_fpm;   }
+  if [[ "${SERVICES[swap]}"     -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/swap.sh";     setup_swap;     fi
+  if [[ "${SERVICES[firewall]}" -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/firewall.sh"; setup_firewall; fi
+  if [[ "${SERVICES[redis]}"    -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/redis.sh";    install_redis;  fi
+  if [[ "${SERVICES[docker]}"   -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/docker.sh";   install_docker; fi
+  if [[ "${SERVICES[certbot]}"  -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/certbot.sh";  install_certbot; fi
+  if [[ "${SERVICES[phptune]}"  -eq 1 ]]; then source "$SCRIPT_DIR/scripts/services/php_tune.sh"; tune_php_fpm;   fi
 
   section "PulseDeploy Complete 🎉"
   log "Log saved to: $LOG_FILE"
   print_summary
+  return 0
 }
 
 print_summary() {
@@ -453,6 +503,7 @@ print_summary() {
     echo -e "  ${CYAN}SSL       :${RESET} Run ${BOLD}certbot --nginx -d ${DOMAIN}${RESET} to issue cert"
   echo ""
   warn "Delete /var/www/html/info.php after verifying PHP works!"
+  return 0
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
