@@ -1,4 +1,4 @@
-name: CI — Lint & Validate
+name: CI - Lint & Validate
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   shellcheck:
-    name: ShellCheck — Bash Lint
+    name: ShellCheck - Bash Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +19,21 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
 
-      - name: Lint bootstrap.sh
-        run: shellcheck -x bootstrap.sh
+      - name: Lint entry points
+        run: shellcheck -x bootstrap.sh revert.sh
 
-      - name: Lint all service scripts
+      - name: Lint library, module and test scripts
         run: |
-          find scripts/ -name "*.sh" | xargs shellcheck -x
+          find scripts/ tests/ -name "*.sh" | xargs shellcheck -x
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: bash tests/run.sh
 
   validate-configs:
     name: Validate Config Templates
@@ -71,6 +80,11 @@ jobs:
             "scripts/os/debian.sh"
             "scripts/os/amazon_linux.sh"
             "scripts/os/centos_rocky.sh"
+            "revert.sh"
+            "tests/run.sh"
+            "scripts/lib/common.sh"
+            "scripts/lib/web.sh"
+            "scripts/services/mysql.sh"
             "scripts/stacks/lemp.sh"
             "scripts/stacks/lamp.sh"
             "scripts/stacks/node.sh"

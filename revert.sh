@@ -1,42 +1,50 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — revert.sh
+# PulseDeploy - revert.sh
 # Rolls back changes made by bootstrap.sh, component by component.
-# Detection-based (checks what's actually present), NOT log-based, since
-# bootstrap.sh doesn't currently write a machine-readable install manifest.
+# Detection-based (checks what's actually present), works on apt and dnf/yum
+# systems. Defaults to a DRY RUN; databases, Redis dumps and Docker data are
+# kept unless --purge-data is given.
 # Repo    : https://github.com/Xbot-me/PulseDeploy
 # License : MIT
 # =============================================================================
-set -euo pipefail
+set -Eeuo pipefail
 
-LOG_FILE="/var/log/server-revert.log"
-REVERT_VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="${PULSE_REVERT_LOG_FILE:-/var/log/server-revert.log}"
+REVERT_VERSION="0.2.0"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+if [[ ! -f "$SCRIPT_DIR/scripts/lib/common.sh" ]]; then
+  echo "revert.sh must be run from a full PulseDeploy checkout." >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/common.sh
+source "$SCRIPT_DIR/scripts/lib/common.sh"
 
-log()     { echo -e "${GREEN}[✔]${RESET} $*" | tee -a "$LOG_FILE"; }
-warn()    { echo -e "${YELLOW}[⚠]${RESET} $*" | tee -a "$LOG_FILE"; }
-error()   { echo -e "${RED}[✘]${RESET} $*" | tee -a "$LOG_FILE"; exit 1; }
-info()    { echo -e "${CYAN}[i]${RESET} $*" | tee -a "$LOG_FILE"; }
-section() { echo -e "\n${BOLD}${BLUE}━━━ $* ━━━${RESET}\n" | tee -a "$LOG_FILE"; }
+if command -v apt-get &>/dev/null; then PKG_MANAGER="apt"
+elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then PKG_MANAGER="dnf"
+else PKG_MANAGER="unknown"; fi
 
 handle_error() {
-  local exit_code="$1" line_no="$2" last_cmd="$3"
-  local func_name="${FUNCNAME[2]:-main}"
-  echo -e "\n${RED}${BOLD}✘ revert.sh failed${RESET}" | tee -a "$LOG_FILE"
-  echo -e "${RED}  Function   :${RESET} $func_name"    | tee -a "$LOG_FILE"
-  echo -e "${RED}  Line       :${RESET} $line_no"      | tee -a "$LOG_FILE"
-  echo -e "${RED}  Command    :${RESET} $last_cmd"      | tee -a "$LOG_FILE"
-  echo -e "${RED}  Exit code  :${RESET} $exit_code"     | tee -a "$LOG_FILE"
+  local exit_code="$1" file="$2" line_no="$3" last_cmd="$4"
+  trap - ERR
+  {
+    echo -e "\n${RED}${BOLD}✘ revert.sh failed${RESET}"
+    echo -e "${RED}  Function   :${RESET} ${FUNCNAME[1]:-main}"
+    echo -e "${RED}  Location   :${RESET} ${file}:${line_no}"
+    echo -e "${RED}  Command    :${RESET} $last_cmd"
+    echo -e "${RED}  Exit code  :${RESET} $exit_code"
+  } >&2
   exit "$exit_code"
 }
-trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_error $? "${BASH_SOURCE[0]##*/}" $LINENO "$BASH_COMMAND"' ERR
 
 DRY_RUN=1
 ASSUME_YES=0
 PURGE_CERTS=0
-declare -A DO=( [docker]=0 [redis]=0 [firewall]=0 [certbot]=0 [swap]=0 [stack]=0 [phptune]=0 )
+PURGE_DATA=0
+LIST_ONLY=0
+declare -A TARGET=( [docker]=0 [redis]=0 [firewall]=0 [certbot]=0 [swap]=0 [stack]=0 [phptune]=0 )
 ANY_SELECTED=0
 
 print_help() {
@@ -46,58 +54,65 @@ ${BOLD}USAGE${RESET}
 
 ${BOLD}DESCRIPTION${RESET}
   Reverts changes made by bootstrap.sh. Detects what's actually installed
-  on this box (not log-based) and removes it. Defaults to a DRY RUN — no
+  on this box (not log-based) and removes it. Defaults to a DRY RUN - no
   changes are made unless you pass --yes.
 
 ${BOLD}COMPONENT FLAGS${RESET} (omit all to target everything detected)
   --docker         Remove Docker, Compose, its repo + GPG key
   --redis          Remove Redis
-  --firewall       Disable ufw, remove fail2ban
+  --firewall       Disable ufw/firewalld, remove fail2ban
   --certbot        Remove Certbot (certs kept unless --purge-certs)
   --swap           Remove /swapfile and its fstab entry
   --stack          Remove LEMP/LAMP/Node packages (nginx/apache/php/mysql/node)
-  --phptune        Restore PHP-FPM pool/php.ini from .bak (undo php_tune.sh)
+  --phptune        Undo PHP tuning (drop-in ini files, restore pool config)
   --all            Target every component above
 
 ${BOLD}BEHAVIOUR${RESET}
-  --yes            Actually apply changes (required — default is dry-run)
-  --purge-certs    Also delete Certbot certificates (irreversible)
+  --yes            Actually apply changes (required - default is dry-run)
+  --no-confirm     Skip the typed-YES prompts for firewall/stack (automation)
+  --purge-data     ALSO delete data: /var/lib/mysql, /var/lib/redis,
+                   /var/lib/docker, /var/lib/containerd  (irreversible)
+  --purge-certs    ALSO delete Certbot certificates (irreversible)
   --list           Just show what's currently detected as installed, then exit
   -h, --help       Show this help
 
 ${BOLD}EXAMPLES${RESET}
   sudo bash revert.sh --list
   sudo bash revert.sh --docker --redis --yes
-  sudo bash revert.sh --all --yes
+  sudo bash revert.sh --all --yes --no-confirm
 
 ${BOLD}WARNING${RESET}
-  --firewall disables ufw entirely. If you're connected over SSH and rely on
-  ufw rules rather than your cloud provider's own firewall, make sure you
+  --firewall disables your OS firewall entirely. If you're connected over SSH
+  and rely on it rather than your cloud provider's firewall, make sure you
   have console/serial access as a fallback before running this.
 EOF
+  return 0
 }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --docker)       DO[docker]=1;    ANY_SELECTED=1; shift ;;
-      --redis)        DO[redis]=1;     ANY_SELECTED=1; shift ;;
-      --firewall)     DO[firewall]=1;  ANY_SELECTED=1; shift ;;
-      --certbot)      DO[certbot]=1;   ANY_SELECTED=1; shift ;;
-      --swap)         DO[swap]=1;      ANY_SELECTED=1; shift ;;
-      --stack)        DO[stack]=1;     ANY_SELECTED=1; shift ;;
-      --phptune)      DO[phptune]=1;   ANY_SELECTED=1; shift ;;
-      --all)          for k in "${!DO[@]}"; do DO[$k]=1; done; ANY_SELECTED=1; shift ;;
+      --docker)       TARGET[docker]=1;    ANY_SELECTED=1; shift ;;
+      --redis)        TARGET[redis]=1;     ANY_SELECTED=1; shift ;;
+      --firewall)     TARGET[firewall]=1;  ANY_SELECTED=1; shift ;;
+      --certbot)      TARGET[certbot]=1;   ANY_SELECTED=1; shift ;;
+      --swap)         TARGET[swap]=1;      ANY_SELECTED=1; shift ;;
+      --stack)        TARGET[stack]=1;     ANY_SELECTED=1; shift ;;
+      --phptune)      TARGET[phptune]=1;   ANY_SELECTED=1; shift ;;
+      --all)          local k; for k in "${!TARGET[@]}"; do TARGET[$k]=1; done; ANY_SELECTED=1; shift ;;
       --yes)          DRY_RUN=0; shift ;;
+      --no-confirm)   ASSUME_YES=1; shift ;;
+      --purge-data)   PURGE_DATA=1; shift ;;
       --purge-certs)  PURGE_CERTS=1; shift ;;
       --list)         LIST_ONLY=1; shift ;;
       -h|--help)      print_help; exit 0 ;;
-      *) warn "Unknown flag: $1 — run --help for usage"; shift ;;
+      *) error "Unknown option: $1 - run --help for usage" ;;
     esac
   done
   # No components explicitly picked -> target everything detected
   if [[ "$ANY_SELECTED" -eq 0 ]]; then
-    for k in "${!DO[@]}"; do DO[$k]=1; done
+    local k
+    for k in "${!TARGET[@]}"; do TARGET[$k]=1; done
   fi
   return 0
 }
@@ -107,166 +122,248 @@ check_root() {
   return 0
 }
 
-# ── Detection ──────────────────────────────────────────────────────────────
-detected_docker()   { command -v docker &>/dev/null || dpkg -l 2>/dev/null | grep -q '^ii  docker-ce '; }
-detected_redis()    { dpkg -l 2>/dev/null | grep -q '^ii  redis-server '; }
-detected_firewall() { command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi active; }
-detected_fail2ban() { dpkg -l 2>/dev/null | grep -q '^ii  fail2ban '; }
-detected_certbot()  { command -v certbot &>/dev/null; }
-detected_swap()     { [[ -f /swapfile ]] || swapon --show 2>/dev/null | grep -q .; }
-detected_nginx()    { dpkg -l 2>/dev/null | grep -q '^ii  nginx'; }
-detected_apache()   { dpkg -l 2>/dev/null | grep -q '^ii  apache2 '; }
-detected_php()      { dpkg -l 2>/dev/null | grep -q '^ii  php[0-9.]*-fpm'; }
-detected_mysql()    { dpkg -l 2>/dev/null | grep -qE '^ii  (mysql|mariadb)-server'; }
-detected_node()     { command -v node &>/dev/null; }
-detected_phptune()  { find /etc/php -name "*.bak" 2>/dev/null | grep -q .; }
-
-show_status() {
-  section "Detected Components"
-  printf "  %-12s %s\n" "Docker:"   "$(detected_docker   && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Redis:"    "$(detected_redis    && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "UFW:"      "$(detected_firewall && echo -e "${GREEN}active${RESET}"  || echo -e "${RED}inactive${RESET}")"
-  printf "  %-12s %s\n" "fail2ban:" "$(detected_fail2ban && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Certbot:"  "$(detected_certbot  && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Swap:"     "$(detected_swap     && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Nginx:"    "$(detected_nginx    && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Apache:"   "$(detected_apache   && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "PHP-FPM:"  "$(detected_php      && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "MySQL:"    "$(detected_mysql    && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "Node.js:"  "$(detected_node     && echo -e "${GREEN}present${RESET}" || echo -e "${RED}absent${RESET}")"
-  printf "  %-12s %s\n" "PHP tune:" "$(detected_phptune  && echo -e "${GREEN}applied${RESET}" || echo -e "${RED}not applied${RESET}")"
-  echo ""
+# ── Helpers ────────────────────────────────────────────────────────────────
+# Run a command, or just print it in dry-run mode. A failing step is reported
+# and skipped so one missing service never aborts the rest of the revert.
+run_or_echo() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo -e "${YELLOW}  [dry-run]${RESET} $*"
+  elif ! "$@"; then
+    warn "Step failed (continuing): $*"
+  fi
   return 0
 }
 
-run_or_echo() {
-  # In dry-run mode, print the command instead of running it.
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo -e "${YELLOW}  [dry-run]${RESET} $*"
-  else
-    "$@"
-  fi
+applied() { [[ "$DRY_RUN" -eq 0 ]]; }
+
+# installed_matching <pattern>... - names of installed packages matching globs
+installed_matching() {
+  case "$PKG_MANAGER" in
+    apt)
+      dpkg-query -W -f='${Package}\t${Status}\n' "$@" 2>/dev/null |
+        awk -F'\t' '$2 ~ /install ok installed/ { print $1 }' || true
+      ;;
+    dnf)
+      local pat
+      for pat in "$@"; do rpm -qa --qf '%{NAME}\n' "$pat" 2>/dev/null || true; done | sort -u
+      ;;
+  esac
+}
+
+any_installed() { [[ -n "$(installed_matching "$@")" ]]; }
+
+# remove_matching <purge|keep> <pattern>...
+# purge → also drops package config (apt purge); keep → leaves data/config.
+remove_matching() {
+  local mode="$1"
+  shift
+  local -a pkgs
+  mapfile -t pkgs < <(installed_matching "$@")
+  ((${#pkgs[@]})) || return 0
+  case "$PKG_MANAGER" in
+    apt)
+      if [[ "$mode" == "purge" ]]; then run_or_echo apt_get purge "${pkgs[@]}"
+      else run_or_echo apt_get remove "${pkgs[@]}"; fi
+      ;;
+    dnf) run_or_echo pm_rpm remove -y "${pkgs[@]}" ;;
+  esac
+  return 0
+}
+
+stop_units() {
+  local u
+  for u in "$@"; do
+    if svc_exists "$u" 2>/dev/null; then
+      run_or_echo systemctl disable --now "$u"
+    fi
+  done
+  return 0
+}
+
+confirm_typed() {
+  [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]] || return 0
+  local conf=""
+  read -rp "$(echo -e "${YELLOW}$1 Type YES to confirm:${RESET} ")" conf || conf=""
+  [[ "$conf" == "YES" ]]
+}
+
+# ── Detection ──────────────────────────────────────────────────────────────
+detected_docker()   { command -v docker &>/dev/null || any_installed docker-ce docker.io docker; }
+detected_redis()    { any_installed redis-server redis redis6 redis7; }
+detected_firewall() {
+  { command -v ufw &>/dev/null && [[ "$(ufw status 2>/dev/null | head -n 1)" == "Status: active" ]]; } ||
+    { command -v firewall-cmd &>/dev/null && svc_active firewalld; }
+}
+detected_fail2ban() { any_installed fail2ban; }
+detected_certbot()  { command -v certbot &>/dev/null; }
+# Only swap created by PulseDeploy: its sysctl file is the marker (early
+# versions wrote the same values without the comment line).
+detected_swap() {
+  [[ -f /swapfile && -f /etc/sysctl.d/99-swap.conf ]] &&
+    grep -Eq 'Managed by PulseDeploy|vm\.vfs_cache_pressure=50' /etc/sysctl.d/99-swap.conf
+}
+detected_nginx()    { any_installed nginx; }
+detected_apache()   { any_installed apache2 httpd; }
+detected_php()      { [[ -n "$(installed_matching 'php*')" ]]; }
+detected_mysql()    { any_installed 'mysql-server*' 'mariadb-server*' 'mysql-community-server*' 'mariadb*-server'; }
+detected_node()     { command -v node &>/dev/null; }
+detected_phptune()  {
+  compgen -G '/etc/php/*/*/conf.d/99-pulsedeploy.ini' >/dev/null ||
+    [[ -f /etc/php.d/99-pulsedeploy.ini ]] ||
+    compgen -G '/etc/php/*/fpm/pool.d/*.pulsedeploy.bak' >/dev/null ||
+    [[ -f /etc/php-fpm.d/www.conf.pulsedeploy.bak ]]
+}
+
+show_status() {
+  section "Detected Components"
+  local present="${GREEN}present${RESET}" absent="${RED}absent${RESET}"
+  status_line() { if "$2"; then printf "  %-12s %s\n" "$1" "$present"; else printf "  %-12s %s\n" "$1" "$absent"; fi; }
+  status_line "Docker:"   detected_docker
+  status_line "Redis:"    detected_redis
+  status_line "Firewall:" detected_firewall
+  status_line "fail2ban:" detected_fail2ban
+  status_line "Certbot:"  detected_certbot
+  status_line "Swap:"     detected_swap
+  status_line "Nginx:"    detected_nginx
+  status_line "Apache:"   detected_apache
+  status_line "PHP:"      detected_php
+  status_line "Database:" detected_mysql
+  status_line "Node.js:"  detected_node
+  status_line "PHP tune:" detected_phptune
+  echo ""
   return 0
 }
 
 # ── Revert functions ──────────────────────────────────────────────────────
 revert_docker() {
-  if ! detected_docker; then info "Docker not detected — skipping"; return 0; fi
+  if ! detected_docker; then info "Docker not detected - skipping"; return 0; fi
   section "Reverting Docker"
-  run_or_echo systemctl stop docker
-  run_or_echo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  run_or_echo dnf remove -y docker docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  run_or_echo rm -rf /var/lib/docker /var/lib/containerd
-  run_or_echo rm -f /etc/apt/sources.list.d/docker.list
-  # NOTE: install_docker() writes the GPG key to /etc/apt/keyrings/docker.gpg
-  run_or_echo rm -f /etc/apt/keyrings/docker.gpg
-  run_or_echo rm -f /usr/local/bin/docker-compose
-  run_or_echo rm -f /etc/docker/daemon.json
-  run_or_echo rm -f /etc/cron.d/docker-weekly-prune
-  run_or_echo rm -f /var/log/docker-prune.log
-  run_or_echo groupdel docker
-  [[ "$DRY_RUN" -eq 0 ]] && log "Docker removed" || info "(dry-run) would remove Docker"
+  stop_units docker.socket docker containerd
+  remove_matching purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
+    docker-compose-plugin docker-ce-rootless-extras docker.io docker
+  run_or_echo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg
+  run_or_echo rm -f /etc/yum.repos.d/docker-ce.repo
+  run_or_echo rm -f /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+  if [[ -f /etc/docker/daemon.json ]] && grep -q '"userland-proxy": false' /etc/docker/daemon.json; then
+    run_or_echo rm -f /etc/docker/daemon.json
+  fi
+  run_or_echo rm -f /etc/cron.d/docker-weekly-prune /var/log/docker-prune.log
+  if [[ "$PURGE_DATA" -eq 1 ]]; then
+    warn "--purge-data: deleting ALL Docker images, containers and volumes"
+    run_or_echo rm -rf /var/lib/docker /var/lib/containerd
+  else
+    info "Docker data kept in /var/lib/docker (pass --purge-data to delete images/volumes)"
+  fi
+  if applied; then log "Docker removed"; else info "(dry-run) would remove Docker"; fi
   return 0
 }
 
 revert_redis() {
-  if ! detected_redis; then info "Redis not detected — skipping"; return 0; fi
+  if ! detected_redis; then info "Redis not detected - skipping"; return 0; fi
   section "Reverting Redis"
-  local svc="redis-server"
-  command -v redis-server &>/dev/null || svc="redis"
-  run_or_echo systemctl stop "$svc"
-  run_or_echo apt-get purge -y redis-server redis-tools
-  run_or_echo dnf remove -y redis
-  run_or_echo rm -rf /etc/redis /var/lib/redis
-  [[ "$DRY_RUN" -eq 0 ]] && log "Redis removed" || info "(dry-run) would remove Redis"
+  stop_units redis-server redis
+  remove_matching purge redis-server redis-tools redis redis6 redis7
+  if [[ "$PURGE_DATA" -eq 1 ]]; then
+    run_or_echo rm -rf /var/lib/redis
+  else
+    info "Redis data kept in /var/lib/redis (pass --purge-data to delete)"
+  fi
+  if applied; then log "Redis removed"; else info "(dry-run) would remove Redis"; fi
   return 0
 }
 
 revert_firewall() {
   local have_ufw=0 have_firewalld=0 have_f2b=0
-  detected_firewall && have_ufw=1
-  { command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; } && have_firewalld=1
+  if command -v ufw &>/dev/null && [[ "$(ufw status 2>/dev/null | head -n 1)" == "Status: active" ]]; then have_ufw=1; fi
+  if command -v firewall-cmd &>/dev/null && svc_active firewalld; then have_firewalld=1; fi
   detected_fail2ban && have_f2b=1
   if [[ "$have_ufw" -eq 0 && "$have_firewalld" -eq 0 && "$have_f2b" -eq 0 ]]; then
-    info "No active ufw/firewalld/fail2ban detected — skipping"; return 0
+    info "No active ufw/firewalld/fail2ban detected - skipping"
+    return 0
   fi
   section "Reverting Firewall"
   warn "This disables your firewall entirely. Make sure you have console/serial"
   warn "access as a fallback in case your cloud provider's own firewall isn't set up."
-  if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
-    read -rp "$(echo -e "${YELLOW}Type YES to confirm disabling the firewall:${RESET} ")" CONF
-    [[ "$CONF" == "YES" ]] || { warn "Skipped firewall revert (not confirmed)"; return 0; }
+  if ! confirm_typed "Disable the firewall?"; then
+    warn "Skipped firewall revert (not confirmed)"
+    return 0
   fi
   [[ "$have_ufw" -eq 1 ]] && run_or_echo ufw --force disable
   [[ "$have_firewalld" -eq 1 ]] && run_or_echo systemctl disable --now firewalld
-  run_or_echo apt-get purge -y fail2ban
-  run_or_echo dnf remove -y fail2ban
-  run_or_echo rm -f /etc/fail2ban/jail.local
-  [[ "$DRY_RUN" -eq 0 ]] && log "Firewall reverted" || info "(dry-run) would disable firewall + remove fail2ban"
+  stop_units fail2ban
+  remove_matching purge fail2ban fail2ban-firewalld fail2ban-systemd
+  run_or_echo rm -f /etc/fail2ban/jail.d/zz-pulsedeploy.conf
+  if [[ -f /etc/fail2ban/jail.local.pulsedeploy.bak ]]; then
+    run_or_echo mv /etc/fail2ban/jail.local.pulsedeploy.bak /etc/fail2ban/jail.local
+  fi
+  if applied; then log "Firewall reverted"; else info "(dry-run) would disable firewall + remove fail2ban"; fi
   return 0
 }
 
 revert_certbot() {
-  if ! detected_certbot; then info "Certbot not detected — skipping"; return 0; fi
+  if ! detected_certbot; then info "Certbot not detected - skipping"; return 0; fi
   section "Reverting Certbot"
-  # install_certbot() prefers snap (--classic certbot), falling back to apt
-  # only if snap fails. Try both removal paths.
+  stop_units certbot.timer certbot-renew.timer
   if command -v snap &>/dev/null && snap list certbot &>/dev/null; then
     run_or_echo snap remove --purge certbot
   fi
-  run_or_echo apt-get purge -y certbot python3-certbot-nginx python3-certbot-apache
-  run_or_echo rm -f /usr/local/bin/certbot
-  # install_certbot() adds a renewal job to root's crontab, NOT /etc/cron.d
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    crontab -l 2>/dev/null | grep -v 'certbot renew' | crontab - 2>/dev/null || true
-  else
-    echo -e "${YELLOW}  [dry-run]${RESET} remove certbot renew line from root's crontab"
+  remove_matching purge certbot python3-certbot-nginx python3-certbot-apache
+  [[ -L /usr/local/bin/certbot ]] && run_or_echo rm -f /usr/local/bin/certbot
+  run_or_echo rm -f /etc/cron.d/pulsedeploy-certbot /etc/letsencrypt/renewal-hooks/deploy/pulsedeploy-reload.sh
+  # Older versions added a line to root's crontab instead
+  if crontab -l 2>/dev/null | grep -q 'certbot renew'; then
+    if applied; then
+      crontab -l 2>/dev/null | grep -v 'certbot renew' | crontab - || true
+    else
+      echo -e "${YELLOW}  [dry-run]${RESET} remove certbot renew line from root's crontab"
+    fi
   fi
   if [[ "$PURGE_CERTS" -eq 1 ]]; then
-    warn "Deleting certificates in /etc/letsencrypt — this is irreversible"
+    warn "Deleting certificates in /etc/letsencrypt - this is irreversible"
     run_or_echo rm -rf /etc/letsencrypt
   else
-    info "Certificates left in place — pass --purge-certs to also delete them"
+    info "Certificates left in place - pass --purge-certs to also delete them"
   fi
-  [[ "$DRY_RUN" -eq 0 ]] && log "Certbot removed" || info "(dry-run) would remove Certbot"
+  if applied; then log "Certbot removed"; else info "(dry-run) would remove Certbot"; fi
   return 0
 }
 
 revert_swap() {
-  if ! detected_swap; then info "No swap detected — skipping"; return 0; fi
+  if ! detected_swap; then info "No PulseDeploy-created swap file detected - skipping"; return 0; fi
   section "Reverting Swap"
-  run_or_echo swapoff /swapfile
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    sed -i '\#/swapfile#d' /etc/fstab
+  if [[ -n "$(swapon --show=NAME --noheadings 2>/dev/null | grep -x '/swapfile' || true)" ]]; then
+    run_or_echo swapoff /swapfile
+  fi
+  if applied; then
+    sed -i '\#^/swapfile[[:space:]]#d' /etc/fstab
   else
     echo -e "${YELLOW}  [dry-run]${RESET} remove /swapfile line from /etc/fstab"
   fi
-  run_or_echo rm -f /swapfile
-  # setup_swap() writes vm.swappiness/vfs_cache_pressure tuning here
-  run_or_echo rm -f /etc/sysctl.d/99-swap.conf
+  run_or_echo rm -f /swapfile /etc/sysctl.d/99-swap.conf
   run_or_echo sysctl -w vm.swappiness=60
   run_or_echo sysctl -w vm.vfs_cache_pressure=100
-  [[ "$DRY_RUN" -eq 0 ]] && log "Swap removed" || info "(dry-run) would remove swap"
+  if applied; then log "Swap removed"; else info "(dry-run) would remove swap"; fi
   return 0
 }
 
 revert_phptune() {
-  if ! detected_phptune; then info "No php_tune.sh backups detected — skipping"; return 0; fi
-  section "Reverting PHP-FPM Tuning"
-  local restored=0
-  while IFS= read -r bak; do
-    local orig="${bak%.bak}"
-    info "Restoring $orig from backup"
-    run_or_echo cp "$bak" "$orig"
-    restored=1
-  done < <(find /etc/php -name "*.bak" 2>/dev/null)
-  if [[ "$restored" -eq 1 ]]; then
-    run_or_echo systemctl restart php-fpm
-    for f in /etc/init.d/php*-fpm; do
-      [[ -e "$f" ]] && run_or_echo systemctl restart "$(basename "$f")"
-    done
-  fi
-  [[ "$DRY_RUN" -eq 0 ]] && log "PHP-FPM config restored from backup" || info "(dry-run) would restore PHP-FPM config from .bak files"
+  if ! detected_phptune; then info "No PHP tuning detected - skipping"; return 0; fi
+  section "Reverting PHP Tuning"
+  local f
+  for f in /etc/php/*/*/conf.d/99-pulsedeploy.ini /etc/php.d/99-pulsedeploy.ini; do
+    [[ -e "$f" ]] && run_or_echo rm -f "$f"
+  done
+  for f in /etc/php/*/fpm/pool.d/*.pulsedeploy.bak /etc/php-fpm.d/*.pulsedeploy.bak; do
+    [[ -e "$f" ]] || continue
+    info "Restoring ${f%.pulsedeploy.bak} from backup"
+    run_or_echo cp -a "$f" "${f%.pulsedeploy.bak}"
+    run_or_echo rm -f "$f"
+  done
+  local svc
+  for svc in $(systemctl list-units --type=service --state=active --no-legend 'php*-fpm.service' 2>/dev/null | awk '{ print $1 }'); do
+    run_or_echo systemctl restart "$svc"
+  done
+  if applied; then log "PHP tuning reverted"; else info "(dry-run) would revert PHP tuning"; fi
   return 0
 }
 
@@ -277,64 +374,107 @@ revert_stack() {
   detected_php    && any=1
   detected_mysql  && any=1
   detected_node   && any=1
-  if [[ "$any" -eq 0 ]]; then info "No stack packages detected — skipping"; return 0; fi
+  if [[ "$any" -eq 0 ]]; then info "No stack packages detected - skipping"; return 0; fi
 
   section "Reverting Stack Packages"
   warn "This removes web server / DB / runtime packages. Site content in"
-  warn "/var/www is NOT deleted, only the packages that serve it."
-  if [[ "$DRY_RUN" -eq 0 && "$ASSUME_YES" -eq 0 ]]; then
-    read -rp "$(echo -e "${YELLOW}Type YES to confirm removing stack packages:${RESET} ")" CONF
-    [[ "$CONF" == "YES" ]] || { warn "Skipped stack revert (not confirmed)"; return 0; }
+  warn "/var/www is NOT deleted. Databases are kept unless --purge-data is given."
+  warn "ALL installed PHP packages are removed, including ones PulseDeploy did not install."
+  if ! confirm_typed "Remove stack packages?"; then
+    warn "Skipped stack revert (not confirmed)"
+    return 0
   fi
 
-  detected_nginx  && run_or_echo apt-get purge -y nginx nginx-common
-  detected_apache && run_or_echo apt-get purge -y apache2
-  detected_php    && run_or_echo bash -c "apt-get purge -y 'php*'"
-  detected_mysql  && run_or_echo apt-get purge -y mysql-server mariadb-server
-  detected_node   && info "Node.js left in place (installed via nvm/tarball in most setups — remove manually if needed)"
-
-  [[ "$DRY_RUN" -eq 0 ]] && log "Stack packages reverted" || info "(dry-run) would remove stack packages"
+  if detected_nginx; then
+    stop_units nginx
+    remove_matching purge nginx 'nginx-*' 'libnginx-mod-*'
+    run_or_echo rm -f /etc/nginx/conf.d/pulsedeploy.conf
+  fi
+  if detected_apache; then
+    stop_units apache2 httpd
+    remove_matching purge apache2 'apache2-*' 'libapache2-mod-*' httpd 'httpd-*' mod_ssl
+    run_or_echo rm -f /etc/httpd/conf.d/pulsedeploy.conf
+  fi
+  if detected_php; then
+    stop_units php-fpm 'php8.1-fpm' 'php8.2-fpm' 'php8.3-fpm' 'php8.4-fpm'
+    remove_matching purge 'php*'
+  fi
+  if detected_mysql; then
+    stop_units mysql mysqld mariadb
+    # keep → apt remove: database files and config stay on disk
+    remove_matching keep 'mysql-server*' 'mariadb-server*' 'mysql-community-server*' 'mariadb*-server'
+    if [[ "$PURGE_DATA" -eq 1 ]]; then
+      warn "--purge-data: deleting ALL databases in /var/lib/mysql"
+      run_or_echo rm -rf /var/lib/mysql
+      run_or_echo rm -f /root/.my.cnf
+    else
+      info "Databases kept in /var/lib/mysql; credentials kept in /root/.my.cnf (pass --purge-data to delete)"
+    fi
+  fi
+  if detected_node; then
+    if command -v pm2 &>/dev/null; then
+      run_or_echo pm2 unstartup systemd
+      run_or_echo pm2 kill
+      command -v npm &>/dev/null && run_or_echo npm rm -g pm2
+    fi
+    remove_matching purge nodejs
+    run_or_echo rm -f /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg \
+      /etc/yum.repos.d/nodesource-nodejs.repo
+  fi
+  # RHEL: put the stock nginx.conf back if we edited it
+  if [[ -f /etc/nginx/nginx.conf.pulsedeploy.bak ]]; then
+    run_or_echo cp -a /etc/nginx/nginx.conf.pulsedeploy.bak /etc/nginx/nginx.conf
+  fi
+  if applied; then log "Stack packages reverted"; else info "(dry-run) would remove stack packages"; fi
   return 0
 }
 
-cleanup_apt() {
+cleanup_pkgs() {
   section "Cleaning Up"
-  run_or_echo apt-get autoremove -y
-  run_or_echo apt-get autoclean -y
-  [[ "$DRY_RUN" -eq 0 ]] && log "apt cache cleaned" || info "(dry-run) would run apt-get autoremove/autoclean"
+  case "$PKG_MANAGER" in
+    apt)
+      run_or_echo apt_get autoremove
+      run_or_echo apt-get autoclean -y
+      ;;
+    dnf) run_or_echo pm_rpm autoremove -y ;;
+  esac
+  if applied; then log "Package cache cleaned"; else info "(dry-run) would clean unused packages"; fi
   return 0
 }
 
 main() {
-  touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/server-revert.log"
   parse_args "$@"
   check_root
+  touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/server-revert.log"
+  exec > >(tee -a "$LOG_FILE") 2>&1
 
   echo -e "${BOLD}${CYAN}PulseDeploy revert.sh v${REVERT_VERSION}${RESET}"
+  [[ "$PKG_MANAGER" != "unknown" ]] || error "Neither apt nor dnf/yum found - unsupported system."
 
   show_status
-  [[ "${LIST_ONLY:-0}" -eq 1 ]] && exit 0
+  [[ "$LIST_ONLY" -eq 1 ]] && exit 0
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    warn "DRY RUN — no changes will be made. Re-run with --yes to actually apply."
+    warn "DRY RUN - no changes will be made. Re-run with --yes to actually apply."
   fi
 
-  [[ "${DO[docker]}"   -eq 1 ]] && revert_docker
-  [[ "${DO[redis]}"    -eq 1 ]] && revert_redis
-  [[ "${DO[certbot]}"  -eq 1 ]] && revert_certbot
-  [[ "${DO[stack]}"    -eq 1 ]] && revert_stack
-  [[ "${DO[phptune]}"  -eq 1 ]] && revert_phptune
-  [[ "${DO[swap]}"     -eq 1 ]] && revert_swap
-  [[ "${DO[firewall]}" -eq 1 ]] && revert_firewall
+  [[ "${TARGET[docker]}"   -eq 1 ]] && revert_docker
+  [[ "${TARGET[redis]}"    -eq 1 ]] && revert_redis
+  [[ "${TARGET[certbot]}"  -eq 1 ]] && revert_certbot
+  [[ "${TARGET[phptune]}"  -eq 1 ]] && revert_phptune
+  [[ "${TARGET[stack]}"    -eq 1 ]] && revert_stack
+  [[ "${TARGET[swap]}"     -eq 1 ]] && revert_swap
+  [[ "${TARGET[firewall]}" -eq 1 ]] && revert_firewall
 
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    cleanup_apt
+    cleanup_pkgs
     section "Revert Complete"
     log "Log saved to: $LOG_FILE"
   else
     echo ""
     info "This was a dry run. Nothing was changed. Add --yes to apply."
   fi
+  return 0
 }
 
 main "$@"
