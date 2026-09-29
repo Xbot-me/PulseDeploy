@@ -12,13 +12,13 @@ os_update() {
 
 os_install_base() {
   # EPEL first: some packages below (htop) only exist there.
-  retry 3 5 pm_rpm install -y -q epel-release || warn "epel-release unavailable — some optional packages will be skipped"
+  retry 3 5 pm_rpm install -y -q epel-release || warn "epel-release unavailable - some optional packages will be skipped"
 
   local pkgs=(wget git unzip zip ca-certificates gnupg2 net-tools logrotate cronie tar gzip)
   command -v curl &>/dev/null || pkgs+=(curl)
   retry 3 5 pm_rpm install -y -q "${pkgs[@]}"
   pkg_install_optional htop
-  systemctl enable --now crond || warn "Could not start crond — cron jobs will not run."
+  systemctl enable --now crond || warn "Could not start crond - cron jobs will not run."
   log "Base dependencies installed"
   return 0
 }
@@ -32,9 +32,9 @@ os_get_php_repo() {
   if retry 2 5 pm_rpm install -y -q "https://rpms.remirepo.net/enterprise/remi-release-${major}.rpm"; then
     pm_rpm module reset php -y || true
     pm_rpm module enable "php:remi-${PHP_VER:-8.2}" -y ||
-      warn "Remi has no php:remi-${PHP_VER:-8.2} module — using the distribution default PHP."
+      warn "Remi has no php:remi-${PHP_VER:-8.2} module - using the distribution default PHP."
   else
-    warn "Remi repo install failed — PHP will come from the distribution's default repos."
+    warn "Remi repo install failed - PHP will come from the distribution's default repos."
   fi
   return 0
 }
@@ -59,7 +59,7 @@ os_firewall_cmd() {
   esac
 }
 
-# SELinux awareness — returns 0 when Enforcing
+# SELinux awareness - returns 0 when Enforcing
 selinux_enforcing() {
   command -v getenforce &>/dev/null && [[ "$(getenforce)" == "Enforcing" ]]
 }

@@ -49,12 +49,11 @@ tune_php_fpm() {
     pool_changed=1
     log "PHP-FPM pool tuned in $PHP_POOL_CONF"
   else
-    info "No PHP-FPM pool config found (mod_php setup?) — tuning php.ini only"
+    info "No PHP-FPM pool config found (mod_php setup?) - tuning php.ini only"
   fi
 
-  # ── php.ini + OPcache as a drop-in, never editing package-owned files ──────
-  # (Overwriting the package's opcache.ini would drop its zend_extension line
-  # and silently disable OPcache.)
+  # ── php.ini + OPcache as a drop-in; package-owned files are left alone ──────
+  # (rewriting opcache.ini would drop its zend_extension line)
   local opcache_mem=$((ram_mb / 8))
   ((opcache_mem < 64)) && opcache_mem=64
   ((opcache_mem > 256)) && opcache_mem=256
@@ -63,7 +62,7 @@ tune_php_fpm() {
   local d
   for d in "${PHP_INI_DIRS[@]}"; do
     cat >"$d/99-pulsedeploy.ini" <<INI
-; Managed by PulseDeploy — remove this file to undo
+; Managed by PulseDeploy - remove this file to undo
 expose_php = Off
 memory_limit = 256M
 upload_max_filesize = 64M
@@ -84,7 +83,7 @@ INI
   if ((${#written[@]})); then
     log "php.ini + OPcache (${opcache_mem}MB, JIT tracing) tuned via ${written[*]}"
   else
-    warn "No PHP conf.d directory found — php.ini/OPcache tuning skipped."
+    warn "No PHP conf.d directory found - php.ini/OPcache tuning skipped."
   fi
 
   # ── Validate before restarting; roll back on failure ───────────────────────

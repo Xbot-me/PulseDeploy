@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stack: LAMP — Apache + PHP + MySQL/MariaDB
+# Stack: LAMP - Apache + PHP + MySQL/MariaDB
 # shellcheck source=scripts/lib/web.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 # shellcheck source=scripts/services/mysql.sh
@@ -73,7 +73,7 @@ install_lamp() {
   install_mysql
 
   # ── Verify end to end ──────────────────────────────────────────────────────
-  web_check_php || warn "LAMP installed, but the PHP health check failed — see messages above."
+  web_check_php || warn "LAMP installed, but the PHP health check failed - see messages above."
   log "LAMP stack installation complete ✔"
   return 0
 }

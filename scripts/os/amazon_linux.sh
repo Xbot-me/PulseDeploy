@@ -16,7 +16,7 @@ os_install_base() {
   command -v curl &>/dev/null || pkgs+=(curl)
   retry 3 5 pm_rpm install -y -q "${pkgs[@]}"
   pkg_install_optional htop
-  systemctl enable --now crond || warn "Could not start crond — cron jobs will not run."
+  systemctl enable --now crond || warn "Could not start crond - cron jobs will not run."
   log "Base dependencies installed"
   return 0
 }
@@ -61,7 +61,7 @@ is_aws_instance() {
 aws_open_sg_hint() {
   if is_aws_instance; then
     warn "AWS detected: ensure your Security Group allows ports 80/443 (HTTP/HTTPS) and your SSH port."
-    warn "OS firewall rules apply on the instance only — AWS Security Groups are separate."
+    warn "OS firewall rules apply on the instance only - AWS Security Groups are separate."
   fi
   return 0
 }

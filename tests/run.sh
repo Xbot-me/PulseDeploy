@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — unit tests for the shared helpers and the CLI surface.
+# PulseDeploy - unit tests for the shared helpers and the CLI surface.
 # Needs no root, no network and changes nothing on the machine.
 #   bash tests/run.sh
 # =============================================================================
@@ -13,7 +13,7 @@ PASS=0; FAIL=0
 
 ok()   { PASS=$((PASS + 1)); printf '  \033[0;32mok\033[0m   %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  \033[0;31mFAIL\033[0m %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2"; }
-check() { # check "name" <command...>   — passes when the command succeeds
+check() { # check "name" <command...>   - passes when the command succeeds
   local name="$1"; shift
   if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name"; fi
 }

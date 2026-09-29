@@ -9,7 +9,7 @@ install_node() {
   APP_PORT="${APP_PORT:-3000}"
 
   case "$NODE_VER" in
-    18|20) warn "Node.js $NODE_VER is end-of-life upstream — consider --node 22 or 24." ;;
+    18|20) warn "Node.js $NODE_VER is end-of-life upstream - consider --node 22 or 24." ;;
   esac
   if [[ "$OS_ID" == "amzn" && "$OS_VERSION" == "2" ]]; then
     error "Amazon Linux 2 (glibc 2.26) cannot run Node.js 18+. Use Amazon Linux 2023."
@@ -38,9 +38,9 @@ install_node() {
   retry 3 5 npm install -g pm2
   if has_systemd; then
     pm2 startup systemd -u root --hp /root >/dev/null ||
-      warn "pm2 startup failed — apps will not auto-start on reboot (run 'pm2 startup' manually)."
+      warn "pm2 startup failed - apps will not auto-start on reboot (run 'pm2 startup' manually)."
   fi
-  log "PM2 installed — use 'pm2 start app.js --name myapp' to launch"
+  log "PM2 installed - use 'pm2 start app.js --name myapp' to launch"
 
   # ── Nginx reverse proxy ────────────────────────────────────────────────────
   info "Installing Nginx as reverse proxy..."
@@ -52,7 +52,7 @@ install_node() {
   local rendered
   rendered="$(mktemp)"
   cat >"$rendered" <<NGINX
-# Managed by PulseDeploy — Node.js reverse proxy
+# Managed by PulseDeploy - Node.js reverse proxy
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
     ''      '';
@@ -126,19 +126,19 @@ const http = require('http');
 const PORT = process.env.PORT || ${APP_PORT};
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Server is running — replace this with your app!\\n');
+  res.end('Server is running - replace this with your app!\\n');
 }).listen(PORT, '127.0.0.1', () => console.log(\`Listening on port \${PORT}\`));
 JS
   fi
 
   if pm2 describe node-app &>/dev/null; then
-    info "PM2 process 'node-app' already exists — leaving it running"
+    info "PM2 process 'node-app' already exists - leaving it running"
   else
     pm2 start /var/www/app/app.js --name "node-app"
   fi
   pm2 save >/dev/null
 
-  web_check_http 80 || warn "Node stack installed, but nothing answered on port 80 — check 'pm2 logs node-app'."
+  web_check_http 80 || warn "Node stack installed, but nothing answered on port 80 - check 'pm2 logs node-app'."
   log "Node.js + Nginx + PM2 stack complete ✔"
   return 0
 }

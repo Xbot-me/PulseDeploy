@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — shared helpers (logging, validation, packages, services, config)
+# PulseDeploy - shared helpers (logging, validation, packages, services, config)
 # Safe to source more than once and from standalone module usage.
 # =============================================================================
 # shellcheck disable=SC2034  # Variables here are consumed by sourcing scripts
@@ -10,7 +10,7 @@ PULSE_COMMON_LOADED=1
 PULSE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$PULSE_LIB_DIR/../.." && pwd)}"
 
-# os_release_value <KEY> — read one field of /etc/os-release without sourcing it
+# os_release_value <KEY> - read one field of /etc/os-release without sourcing it
 os_release_value() {
   awk -F= -v k="$1" '$1 == k { v = substr($0, length(k) + 2); gsub(/^"|"$/, "", v); print v; exit }' \
     /etc/os-release 2>/dev/null || true
@@ -49,7 +49,7 @@ retry() {
   for ((i = 1; i <= tries; i++)); do
     if "$@"; then return 0; fi
     if ((i < tries)); then
-      warn "Command failed (attempt $i/$tries): $* — retrying in ${delay}s"
+      warn "Command failed (attempt $i/$tries): $* - retrying in ${delay}s"
       sleep "$delay"
     fi
   done
@@ -90,12 +90,12 @@ swap_suggest_size() {
   fi
 }
 
-# download <url> <dest> — fails loudly, retries transient errors
+# download <url> <dest> - fails loudly, retries transient errors
 download() {
   curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$2" "$1"
 }
 
-# backup_file <path> — keep the ORIGINAL once, never overwrite the backup
+# backup_file <path> - keep the ORIGINAL once, never overwrite the backup
 backup_file() {
   if [[ -e "$1" && ! -e "$1.pulsedeploy.bak" ]]; then
     cp -a "$1" "$1.pulsedeploy.bak"
@@ -224,9 +224,9 @@ pkg_install_optional() {
   for p in "$@"; do
     if pkg_installed "$p"; then continue; fi
     if pkg_available "$p"; then
-      os_pkg_install "$p" || warn "Optional package '$p' failed to install — continuing."
+      os_pkg_install "$p" || warn "Optional package '$p' failed to install - continuing."
     else
-      warn "Optional package '$p' is not available — skipping."
+      warn "Optional package '$p' is not available - skipping."
     fi
   done
   return 0
@@ -263,7 +263,7 @@ svc_restart() {
 svc_reload() { systemctl reload "$1" 2>/dev/null || svc_restart "$1"; }
 
 # ── Networking helpers ────────────────────────────────────────────────────────
-# Every TCP port sshd is (or may be) reachable on — used so the firewall can
+# Every TCP port sshd is (or may be) reachable on - used so the firewall can
 # never lock out the session that is running this script.
 ssh_ports() {
   local -a ports=()

@@ -48,7 +48,7 @@ install_mysql() {
 
 # Apply <password> to root@localhost with password authentication forced.
 # A bare `IDENTIFIED BY` keeps the account's current plugin, and root ships
-# with auth_socket, which ignores passwords — so name the plugin explicitly.
+# with auth_socket, which ignores passwords - so name the plugin explicitly.
 # SQL goes over stdin, never the command line, so it can't show up in `ps`.
 _mysql_set_root_password() {
   local pass="$1"
@@ -68,7 +68,7 @@ SQL
 }
 
 # Give root a real random password and remove insecure defaults, then store
-# the credentials in /root/.my.cnf — but ONLY after the change is proven to work.
+# the credentials in /root/.my.cnf, only after the change is verified.
 secure_mysql() {
   info "Securing database server..."
 
@@ -83,7 +83,7 @@ secure_mysql() {
 
   # Already done: saved credentials work AND a password is really required.
   if [[ -n "$saved_pass" && "$cnf_works" -eq 1 && "$socket_open" -eq 0 ]]; then
-    log "MySQL root credentials in $MYSQL_CLIENT_CNF already work — leaving them unchanged"
+    log "MySQL root credentials in $MYSQL_CLIENT_CNF already work - leaving them unchanged"
     return 0
   fi
   if [[ "$socket_open" -eq 0 ]]; then
@@ -99,8 +99,7 @@ secure_mysql() {
   else
     pass="$(generate_password 24)"
   fi
-  # Clean up while socket auth still works; the password change comes last
-  # because afterwards root can no longer connect without it.
+  # Cleanup runs first: once the password is set, root needs it to connect.
   mysql --no-defaults -uroot <<SQL
 DROP USER IF EXISTS ''@'localhost';
 DROP USER IF EXISTS 'root'@'%';
@@ -122,7 +121,7 @@ SQL
   fi
 
   if mysql --no-defaults -uroot -e 'SELECT 1' &>/dev/null; then
-    error "Root can still log in without a password after hardening — the server ignored the authentication change."
+    error "Root can still log in without a password after hardening - the server ignored the authentication change."
   fi
   if ! mysql --defaults-file="$MYSQL_CLIENT_CNF" -e 'SELECT 1' &>/dev/null; then
     error "Root password was changed but the saved credentials in $MYSQL_CLIENT_CNF do not work. Recover with: sudo mysqld_safe --skip-grant-tables (see MySQL docs)."
@@ -154,7 +153,7 @@ create_database() {
   local exists
   exists="$(mysql -N -e "SELECT COUNT(*) FROM mysql.user WHERE User='${DB_USER}' AND Host='localhost';")"
   if [[ "$exists" != "0" ]]; then
-    warn "Database user '${DB_USER}'@'localhost' already exists — password left unchanged."
+    warn "Database user '${DB_USER}'@'localhost' already exists - password left unchanged."
     mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost'; FLUSH PRIVILEGES;"
     return 0
   fi
@@ -171,6 +170,6 @@ SQL
     printf '\n[client_%s]\nuser=%s\npassword="%s"\ndatabase=%s\n' \
       "$DB_USER" "$DB_USER" "$pass" "$DB_NAME" >>"$MYSQL_CLIENT_CNF"
   )
-  log "Database user created: $DB_USER — credentials in $MYSQL_CLIENT_CNF (group [client_${DB_USER}])"
+  log "Database user created: $DB_USER - credentials in $MYSQL_CLIENT_CNF (group [client_${DB_USER}])"
   return 0
 }

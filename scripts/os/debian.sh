@@ -32,7 +32,7 @@ os_install_base() {
   return 0
 }
 
-# Sury PHP repository — only needed when Debian's archive lacks the version.
+# Sury PHP repository - only needed when Debian's archive lacks the version.
 os_get_php_repo() {
   local codename tmp key="/usr/share/keyrings/deb.sury.org-php.gpg"
   codename="$(os_release_value VERSION_CODENAME)"

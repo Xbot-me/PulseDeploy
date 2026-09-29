@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — web-stack helpers shared by the LEMP / LAMP / Node stacks
+# PulseDeploy - web-stack helpers shared by the LEMP / LAMP / Node stacks
 # =============================================================================
 # shellcheck disable=SC2034  # Variables here are consumed by sourcing scripts
 # shellcheck source=scripts/lib/common.sh
@@ -56,7 +56,7 @@ php_ensure_repo() {
       if pkg_available "php${v}-cli"; then
         info "PHP ${v} is available from the distribution archive"
       else
-        info "PHP ${v} not in the distribution archive — adding the PHP repository"
+        info "PHP ${v} not in the distribution archive - adding the PHP repository"
         os_get_php_repo
         pkg_available "php${v}-cli" ||
           error "PHP ${v} is not available for $OS_ID $OS_VERSION even after adding the PHP repository. Try --php with another version."
@@ -94,9 +94,9 @@ php_install_packages() {
       pkg_install_required "${p}-fpm" "${p}-cli" "${p}-mysqlnd" "${p}-gd" "${p}-mbstring" \
         "${p}-xml" "${p}-intl" "${p}-bcmath"
       pkg_install_optional "${p}-opcache"
-      pkg_install_first "${p}-pecl-zip" "${p}-zip" || warn "No PHP zip extension package found — skipping."
+      pkg_install_first "${p}-pecl-zip" "${p}-zip" || warn "No PHP zip extension package found - skipping."
       pkg_install_first "${p}-pecl-redis6" "${p}-pecl-redis5" "${p}-redis" ||
-        warn "No PHP redis extension package found — skipping."
+        warn "No PHP redis extension package found - skipping."
       ;;
   esac
   # Make the version we report match what is really installed. Ask the
@@ -104,9 +104,9 @@ php_install_packages() {
   local actual php_bin="php"
   [[ "$PKG_MANAGER" == "apt" ]] && php_bin="php${v}"
   actual="$("$php_bin" -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;' 2>/dev/null)" ||
-    error "PHP was installed but '$php_bin' does not run — check the package installation output above."
+    error "PHP was installed but '$php_bin' does not run - check the package installation output above."
   if [[ -n "$actual" && "$actual" != "$v" ]]; then
-    warn "Requested PHP ${v} but PHP ${actual} is installed — continuing with ${actual}."
+    warn "Requested PHP ${v} but PHP ${actual} is installed - continuing with ${actual}."
     PHP_VER="$actual"
   fi
   php_layout
@@ -219,7 +219,7 @@ nginx_render() {
 }
 
 # ── Health checks ─────────────────────────────────────────────────────────────
-# web_check_php — drops a throw-away PHP file, requests it over HTTP, removes
+# web_check_php - drops a throw-away PHP file, requests it over HTTP, removes
 # it. Proves web server → PHP end to end without leaving phpinfo() exposed.
 web_check_php() {
   local name token url body=""
@@ -245,7 +245,7 @@ web_check_php() {
   return 1
 }
 
-# web_check_http <port> — expects any 2xx/3xx answer from the local port
+# web_check_http <port> - expects any 2xx/3xx answer from the local port
 web_check_http() {
   local port="$1" code="" i
   for i in 1 2 3 4 5 6 7 8 9 10; do
