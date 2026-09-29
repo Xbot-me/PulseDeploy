@@ -180,25 +180,25 @@ nginx_disable_defaults() {
   return 0
 }
 
-# nginx_activate <rendered-config-file>
+# nginx_activate <rendered-config-file> [destination]
 # Installs the config, validates it with `nginx -t` and rolls back on failure.
 nginx_activate() {
-  local src="$1"
-  backup_file "$NGINX_SITE"
+  local src="$1" site="${2:-$NGINX_SITE}"
+  backup_file "$site"
   local previous=""
-  if [[ -f "$NGINX_SITE" ]]; then
+  if [[ -f "$site" ]]; then
     previous="$(mktemp)"
-    cp -a "$NGINX_SITE" "$previous"
+    cp -a "$site" "$previous"
   fi
-  cp "$src" "$NGINX_SITE"
+  cp "$src" "$site"
   if ! nginx -t; then
-    if [[ -n "$previous" ]]; then cp -a "$previous" "$NGINX_SITE"; else rm -f "$NGINX_SITE"; fi
+    if [[ -n "$previous" ]]; then cp -a "$previous" "$site"; else rm -f "$site"; fi
     [[ -n "$previous" ]] && rm -f "$previous"
     error "Generated nginx configuration is invalid (see output above); it was rolled back."
   fi
   [[ -n "$previous" ]] && rm -f "$previous"
   svc_restart nginx
-  log "Nginx configured: $NGINX_SITE"
+  log "Nginx configured: $site"
   return 0
 }
 

@@ -40,7 +40,7 @@ Built by a developer who personally recovered from 502 storms, 8GB database bloa
 
 | Category       | What's included |
 |----------------|----------------|
-| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL), LAMP (Apache + PHP + MySQL), Node.js + PM2 + Nginx reverse proxy |
+| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL), LAMP (Apache + PHP + MySQL), Node.js + PM2 + Nginx reverse proxy, **Laravel + Next.js** (API + admin + storefront on one small server, see [docs](docs/laravel-next.md)) |
 | **PHP**        | Version selector (8.1 – 8.4; third-party repo added only if your distro lacks it), OPcache JIT, PHP-FPM pool auto-tuning based on RAM |
 | **Security**   | UFW / firewalld, fail2ban (SSH + Nginx + Apache rules), secure file blocking in web configs |
 | **SSL**        | Certbot (Let's Encrypt) with auto-renewal cron |
@@ -86,6 +86,8 @@ The interactive wizard walks you through:
 
 Everything the wizard asks can also be given as a flag (`--stack`, `--php`, `--node`, `--services`, `--domain`, `--email`, `--db-name`, `--db-user`, `--swap-size`, `--redis-conn`, `--open-ports`, `--ssh-port`, `--hostname`, `--timezone`, `--disable-root-ssh`, `--non-interactive`) or `PULSE_*` environment variable. See `bash bootstrap.sh --help`.
 
+**Laravel API + two Next.js apps on one cheap VPS:** `sudo bash bootstrap.sh --stack laravel-next --domain example.com`. It tunes PHP-FPM, MySQL, Redis and Node for a shared 2-8 GB box, sets up systemd services, a queue worker, backups and a `pulse deploy` / `pulse rollback` command. Full guide and CI examples: [docs/laravel-next.md](docs/laravel-next.md).
+
 To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh --yes` (dry-run without `--yes`; databases and Docker data are kept unless `--purge-data`).
 
 ---
@@ -96,11 +98,15 @@ To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh
 PulseDeploy/
 ├── bootstrap.sh              # Main entry point & interactive wizard
 ├── revert.sh                 # Roll back what bootstrap.sh installed (dry-run by default)
+├── bin/pulse                 # On-server CLI: deploy, rollback, status, logs, backup (laravel-next)
+├── docs/laravel-next.md      # Laravel + Next.js stack guide
+├── examples/github-actions/  # CI workflows that build and deploy the apps
 ├── tests/run.sh              # Unit tests for helpers + CLI validation
 ├── scripts/
 │   ├── lib/                  # Shared helpers (logging, validation, pkg/service/config)
 │   │   ├── common.sh
-│   │   └── web.sh            # nginx/apache/PHP layout, health checks
+│   │   ├── web.sh            # nginx/apache/PHP layout, health checks
+│   │   └── profile_tuning.sh # RAM-based sizing for the laravel-next stack
 │   ├── os/                   # OS-specific package management
 │   │   ├── ubuntu.sh
 │   │   ├── debian.sh
@@ -109,7 +115,8 @@ PulseDeploy/
 │   ├── stacks/               # Web stack installers
 │   │   ├── lemp.sh           # Nginx + PHP-FPM + MySQL
 │   │   ├── lamp.sh           # Apache + PHP + MySQL
-│   │   └── node.sh           # Node.js + PM2 + Nginx proxy
+│   │   ├── node.sh           # Node.js + PM2 + Nginx proxy
+│   │   └── laravel_next.sh   # Laravel API + Next.js admin + storefront
 │   └── services/             # Optional service installers
 │       ├── firewall.sh       # UFW / firewalld + fail2ban
 │       ├── redis.sh          # Redis with socket/TCP option

@@ -130,6 +130,15 @@ SQL
   return 0
 }
 
+# mysql_saved_password <user> - password saved for that user in /root/.my.cnf
+mysql_saved_password() {
+  awk -v sec="[client_$1]" '
+    $0 == sec { f = 1; next }
+    /^\[/ { f = 0 }
+    f && /^password=/ { v = substr($0, 10); gsub(/^"|"$/, "", v); print v; exit }
+  ' "$MYSQL_CLIENT_CNF" 2>/dev/null || true
+}
+
 # Create DB_NAME and (optionally) DB_USER with a random password.
 create_database() {
   [[ -z "${DB_NAME:-}" && -z "${DB_USER:-}" ]] && return 0

@@ -1,0 +1,37 @@
+# Build a Next.js app (output: 'standalone') in CI and deploy it with `pulse`.
+# Set APP to "shop" or "admin". Secrets: DEPLOY_HOST, DEPLOY_SSH_KEY
+name: Deploy Next.js
+on:
+  push:
+    branches: [main]
+env:
+  APP: shop
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.com
+      - name: Package standalone output
+        run: |
+          mkdir pkg
+          cp -r .next/standalone/. pkg/
+          mkdir -p pkg/.next && cp -r .next/static pkg/.next/static
+          if [ -d public ]; then cp -r public pkg/public; fi
+          tar -czf app.tar.gz -C pkg .
+      - name: Ship and deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key && printf '%s\n' "$KEY" > key
+          SSH="ssh -i key -o StrictHostKeyChecking=accept-new deploy@$HOST"
+          scp -i key -o StrictHostKeyChecking=accept-new app.tar.gz "deploy@$HOST:/tmp/$APP.tar.gz"
+          $SSH "pulse deploy $APP --artifact /tmp/$APP.tar.gz; status=\$?; rm -f /tmp/$APP.tar.gz; exit \$status"

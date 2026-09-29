@@ -25,12 +25,16 @@ jobs:
       - name: Lint library, module and test scripts
         run: |
           find scripts/ tests/ -name "*.sh" | xargs shellcheck -x
+          shellcheck -x bin/pulse
 
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install nginx (used to validate rendered configs)
+        run: sudo apt-get install -y nginx
 
       - name: Run unit tests
         run: bash tests/run.sh
@@ -84,6 +88,14 @@ jobs:
             "tests/run.sh"
             "scripts/lib/common.sh"
             "scripts/lib/web.sh"
+            "scripts/lib/profile_tuning.sh"
+            "scripts/stacks/laravel_next.sh"
+            "bin/pulse"
+            "config/laravel-next/nginx-api.conf"
+            "config/laravel-next/nginx-next.conf"
+            "config/laravel-next/nginx-http.conf"
+            "config/laravel-next/mysql-tuning.cnf"
+            "config/laravel-next/php-fpm-pool.conf"
             "scripts/services/mysql.sh"
             "scripts/stacks/lemp.sh"
             "scripts/stacks/lamp.sh"

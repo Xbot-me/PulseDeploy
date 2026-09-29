@@ -1,0 +1,25 @@
+[Unit]
+Description=Next.js app (%i)
+After=network.target
+ConditionPathExists=/var/www/%i/current/server.js
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=/var/www/%i/current
+Environment=NODE_ENV=production
+EnvironmentFile=-/var/www/%i/shared/.env
+EnvironmentFile=/etc/pulsedeploy/%i.env
+ExecStart=@NODE_BIN@ server.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+SyslogIdentifier=pulse-%i
+
+[Install]
+WantedBy=multi-user.target
