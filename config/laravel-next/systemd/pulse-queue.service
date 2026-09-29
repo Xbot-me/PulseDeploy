@@ -1,0 +1,20 @@
+[Unit]
+Description=Laravel queue worker
+After=network.target
+ConditionPathExists=/var/www/api/current/artisan
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=/var/www/api/current
+ExecStart=@PHP_BIN@ artisan queue:work redis --sleep=3 --tries=3 --backoff=10 --max-time=3600 --max-jobs=500 --timeout=90
+Restart=always
+RestartSec=5
+MemoryMax=@QUEUE_MEM@M
+NoNewPrivileges=true
+PrivateTmp=true
+SyslogIdentifier=pulse-queue
+
+[Install]
+WantedBy=multi-user.target

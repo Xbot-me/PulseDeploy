@@ -37,7 +37,7 @@ install_redis() {
 
   local ram_mb redis_mem sock="/run/redis/redis.sock" conn="${REDIS_CONN:-socket}"
   ram_mb="$(total_ram_mb)"
-  redis_mem=$((ram_mb / 4)) # ~25% of RAM
+  redis_mem="${REDIS_MAXMEM_MB:-$((ram_mb / 4))}" # default ~25% of RAM
   ((redis_mem < 64)) && redis_mem=64
 
   # ── Security: loopback only ────────────────────────────────────────────────

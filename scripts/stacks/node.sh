@@ -3,18 +3,21 @@
 # shellcheck source=scripts/lib/web.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 
-install_node() {
-  section "Installing Node.js Stack"
+# Install Node.js from NodeSource and verify the major version.
+node_install_runtime() {
   NODE_VER="${NODE_VER:-22}"
-  APP_PORT="${APP_PORT:-3000}"
-
   case "$NODE_VER" in
     18|20) warn "Node.js $NODE_VER is end-of-life upstream - consider --node 22 or 24." ;;
   esac
   if [[ "$OS_ID" == "amzn" && "$OS_VERSION" == "2" ]]; then
     error "Amazon Linux 2 (glibc 2.26) cannot run Node.js 18+. Use Amazon Linux 2023."
   fi
-  require_port_free 80 "nginx"
+  # Reuse an existing install of the requested major version.
+  local existing
+  if existing="$(node -v 2>/dev/null)" && [[ "$existing" == "v${NODE_VER}."* ]]; then
+    log "Node.js ${existing} already installed"
+    return 0
+  fi
 
   # ── Install Node via NodeSource ────────────────────────────────────────────
   info "Adding NodeSource repository for Node.js ${NODE_VER}.x ..."
@@ -32,6 +35,16 @@ install_node() {
   [[ "$actual" == "v${NODE_VER}."* ]] ||
     error "Expected Node.js v${NODE_VER}.x but found ${actual}. Another nodejs source is taking precedence."
   log "Node.js ${actual} installed"
+  return 0
+}
+
+install_node() {
+  section "Installing Node.js Stack"
+  NODE_VER="${NODE_VER:-22}"
+  APP_PORT="${APP_PORT:-3000}"
+
+  require_port_free 80 "nginx"
+  node_install_runtime
 
   # ── PM2 ───────────────────────────────────────────────────────────────────
   info "Installing PM2 process manager..."
