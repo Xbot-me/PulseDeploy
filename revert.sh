@@ -388,7 +388,7 @@ revert_laravel_next() {
   run_or_echo rm -f /usr/local/bin/pulse /etc/sudoers.d/pulsedeploy /etc/cron.d/pulsedeploy-backup \
     /etc/logrotate.d/pulsedeploy /etc/sysctl.d/99-pulsedeploy-app.conf \
     /etc/systemd/journald.conf.d/pulsedeploy.conf
-  run_or_echo rm -rf /etc/pulsedeploy
+  run_or_echo rm -rf /etc/pulsedeploy /etc/nginx/pulsedeploy
   for f in /etc/nginx/conf.d/00-pulsedeploy-http.conf /etc/nginx/conf.d/01-pulsedeploy-cloudflare.conf \
            /etc/nginx/conf.d/pulsedeploy-api.conf /etc/nginx/conf.d/pulsedeploy-shop.conf \
            /etc/nginx/conf.d/pulsedeploy-admin.conf /etc/nginx/conf.d/pulsedeploy-redirect.conf \

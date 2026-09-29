@@ -19,6 +19,7 @@ LNX_APPS_ROOT="${LNX_APPS_ROOT:-/var/www}"
 LNX_ETC="${LNX_ETC:-/etc/pulsedeploy}"
 LNX_SHOP_PORT=3000
 LNX_ADMIN_PORT=3001
+LNX_INTERNAL_API_PORT=8081
 
 # lnx_render <template> <output> KEY=value...   (replaces @KEY@ markers)
 lnx_render() {
@@ -204,10 +205,14 @@ lnx_tune_mysql() {
   [[ -d "$dir" ]] || { warn "No MySQL conf.d directory found; skipping database tuning."; return 0; }
   local target="$dir/zz-pulsedeploy.cnf" binlog=""
   mysql_is_mariadb || binlog="binlog_expire_logs_seconds = 259200"
+  # One database per tenant means many more tables in use at once.
+  local table_cache=800 table_def=1000
+  if [[ -n "${TENANT_DB_PREFIX:-}" ]]; then table_cache=2000; table_def=2000; fi
   lnx_render "$LNX_TEMPLATES/mysql-tuning.cnf" "$target" \
     "MAXCONN=$(tune_mysql_max_connections "$LNX_RAM_MB")" \
     "BP=$(tune_mysql_buffer_pool "$LNX_RAM_MB")" \
     "TMP=$(tune_mysql_tmp_table_mb "$LNX_RAM_MB")" \
+    "TABLE_CACHE=$table_cache" "TABLE_DEF=$table_def" \
     "BINLOG=$binlog"
   local svc
   svc="$(svc_first_existing mysql mysqld mariadb)" || error "No MySQL/MariaDB unit found."
@@ -229,6 +234,8 @@ lnx_write_env() {
   fi
   pass="$(mysql_saved_password "$DB_USER")"
   [[ -n "$pass" ]] || warn "No saved password for database user '$DB_USER'; set DB_PASSWORD in $env yourself."
+  local queue_conn="redis"
+  [[ "${NO_QUEUE:-0}" == "1" ]] && queue_conn="sync"
   local stateful="${ADMIN_HOST},${SHOP_HOST}"
   [[ "$SHOP_HOST" == "$DOMAIN" ]] && stateful="${stateful},www.${DOMAIN}"
   (
@@ -261,7 +268,7 @@ CACHE_DRIVER=redis
 SESSION_DRIVER=redis
 SESSION_DOMAIN=.${DOMAIN}
 SESSION_SECURE_COOKIE=true
-QUEUE_CONNECTION=redis
+QUEUE_CONNECTION=${queue_conn}
 SANCTUM_STATEFUL_DOMAINS=${stateful}
 
 MAIL_MAILER=log
@@ -271,6 +278,26 @@ ENV
   chown "$APP_USER:$APP_USER" "$env"
   chmod 640 "$env"
   log "Wrote $env (APP_KEY is generated on the first deploy)"
+}
+
+# Runtime settings for the Next.js apps (only when absent). The apps can call
+# the API at INTERNAL_API_URL without leaving the machine.
+lnx_write_next_env() {
+  local app env
+  for app in admin shop; do
+    env="$LNX_APPS_ROOT/$app/shared/.env"
+    [[ -e "$env" ]] && continue
+    (
+      umask 027
+      cat >"$env" <<ENV
+# Runtime settings for the ${app} app (read by systemd). NEXT_PUBLIC_* values
+# are baked in at build time and do not belong here.
+INTERNAL_API_URL=http://127.0.0.1:${LNX_INTERNAL_API_PORT}
+ENV
+    )
+    chown "$APP_USER:$APP_USER" "$env"
+    chmod 640 "$env"
+  done
 }
 
 # ── systemd ───────────────────────────────────────────────────────────────────
@@ -298,11 +325,24 @@ lnx_setup_systemd() {
   for f in "$LNX_ETC/shop.env" "$LNX_ETC/admin.env"; do chmod 644 "$f"; done
 
   systemctl daemon-reload
-  systemctl enable pulse-next@shop.service pulse-next@admin.service pulse-queue.service pulse-scheduler.timer &>/dev/null
+  systemctl enable pulse-next@shop.service pulse-next@admin.service &>/dev/null
   systemctl restart pulse-next@shop.service
   systemctl restart pulse-next@admin.service
-  systemctl start pulse-scheduler.timer || warn "scheduler timer did not start"
-  log "systemd units installed: pulse-next@shop, pulse-next@admin, pulse-queue, pulse-scheduler.timer"
+  local extras="pulse-next@shop, pulse-next@admin"
+  if [[ "${NO_QUEUE:-0}" == "1" ]]; then
+    systemctl disable --now pulse-queue.service &>/dev/null || true
+  else
+    systemctl enable pulse-queue.service &>/dev/null
+    extras+=", pulse-queue"
+  fi
+  if [[ "${NO_SCHEDULER:-0}" == "1" ]]; then
+    systemctl disable --now pulse-scheduler.timer &>/dev/null || true
+  else
+    systemctl enable pulse-scheduler.timer &>/dev/null
+    systemctl start pulse-scheduler.timer || warn "scheduler timer did not start"
+    extras+=", pulse-scheduler.timer"
+  fi
+  log "systemd units installed: ${extras}"
 }
 
 lnx_setup_sudoers() {
@@ -378,8 +418,14 @@ lnx_setup_nginx() {
   [[ -s "$cf_tmp" ]] && nginx_activate "$cf_tmp" "$conf_d/01-pulsedeploy-cloudflare.conf"
   rm -f "$cf_tmp"
 
+  # Shared request handling, included by the public and the loopback servers.
+  # It lives outside conf.d so nginx does not load it on its own.
+  local inc_dir="${NGINX_ROOT}/pulsedeploy" inc="${NGINX_ROOT}/pulsedeploy/api-locations.inc"
+  mkdir -p "$inc_dir"
+  lnx_render "$LNX_TEMPLATES/nginx-api-locations.inc" "$inc" "PHP_SOCK=$LNX_PHP_SOCK"
   lnx_render "$LNX_TEMPLATES/nginx-api.conf" "$tmp" \
-    "HOST=$API_HOST" "ROOT=$LNX_APPS_ROOT/api/current/public" "PHP_SOCK=$LNX_PHP_SOCK"
+    "HOST=$API_HOST" "ROOT=$LNX_APPS_ROOT/api/current/public" "PHP_SOCK=$LNX_PHP_SOCK" \
+    "LOCATIONS=$inc" "INTERNAL_PORT=$LNX_INTERNAL_API_PORT"
   lnx_strip_ipv6_if_absent "$tmp"
   nginx_activate "$tmp" "$conf_d/pulsedeploy-api.conf"
 
@@ -389,7 +435,13 @@ lnx_setup_nginx() {
     [[ "$app" == "admin" ]] && { host="$ADMIN_HOST"; port="$LNX_ADMIN_PORT"; }
     names="$host"
     lnx_render "$LNX_TEMPLATES/nginx-next.conf" "$tmp" \
-      "NAME=$app" "PORT=$port" "SERVER_NAMES=$names"
+      "NAME=$app" "PORT=$port" "SERVER_NAMES=$names" \
+      "STORAGE_DIR=$LNX_APPS_ROOT/api/shared/storage/app/public"
+    if [[ "${SERVE_STORAGE:-0}" == "1" ]]; then
+      sed -i 's/^#storage# //' "$tmp"
+    else
+      sed -i '/^#storage# /d' "$tmp"
+    fi
     # Keep only this app's marker lines, drop the other's.
     if [[ "$app" == "shop" ]]; then
       sed -i -e 's/^#shop# //' -e '/^#admin# /d' "$tmp"
@@ -425,6 +477,9 @@ ADMIN_PORT=${LNX_ADMIN_PORT}
 SHOP_PORT=${LNX_SHOP_PORT}
 PHP_BIN=${LNX_PHP_BIN}
 PHP_FPM_SVC=${PHP_FPM_SVC}
+QUEUE_ENABLED=$((1 - ${NO_QUEUE:-0}))
+SCHEDULER_ENABLED=$((1 - ${NO_SCHEDULER:-0}))
+INTERNAL_API_URL=http://127.0.0.1:${LNX_INTERNAL_API_PORT}
 KEEP_RELEASES=5
 DB_NAME=${DB_NAME}
 BACKUP_DIR=/var/backups/pulsedeploy
@@ -503,6 +558,7 @@ ${BOLD}Next steps${RESET}
        pulse deploy shop  --artifact shop.tar.gz
   4. Day to day: pulse status | pulse logs <target> | pulse rollback <app> | sudo pulse backup
   Laravel config: ${LNX_APPS_ROOT}/api/shared/.env   Backups: /var/backups/pulsedeploy
+  Next.js apps can call the API internally at http://127.0.0.1:${LNX_INTERNAL_API_PORT} (loopback only)
 EOF
 }
 
@@ -527,6 +583,7 @@ install_laravel_next() {
 
   lnx_create_dirs
   lnx_write_env
+  lnx_write_next_env
   lnx_placeholders
   lnx_setup_systemd
   lnx_setup_sudoers
