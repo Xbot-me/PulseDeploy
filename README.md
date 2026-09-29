@@ -41,13 +41,14 @@ Built by a developer who personally recovered from 502 storms, 8GB database bloa
 | Category       | What's included |
 |----------------|----------------|
 | **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL), LAMP (Apache + PHP + MySQL), Node.js + PM2 + Nginx reverse proxy |
-| **PHP**        | Version selector (8.1 / 8.2 / 8.3), OPcache JIT, PHP-FPM pool auto-tuning based on RAM |
+| **PHP**        | Version selector (8.1 – 8.4; third-party repo added only if your distro lacks it), OPcache JIT, PHP-FPM pool auto-tuning based on RAM |
 | **Security**   | UFW / firewalld, fail2ban (SSH + Nginx + Apache rules), secure file blocking in web configs |
 | **SSL**        | Certbot (Let's Encrypt) with auto-renewal cron |
 | **Caching**    | Redis with Unix socket or TCP, maxmemory auto-calculated, allkeys-lru policy |
 | **Containers** | Docker Engine + Docker Compose v2, log rotation, weekly prune cron |
 | **Swap**       | Auto-sized swap file based on detected RAM, swappiness=10 tuning |
-| **Logging**    | Full install log saved to `/var/log/pulsedeploy.log` |
+| **Reliability**| Idempotent (safe to re-run), every step verified (health checks, not just exit codes), strict flag/input validation, config changes validated and rolled back on failure |
+| **Logging**    | Full install log saved to `/var/log/server-bootstrap.log` |
 
 ---
 
@@ -57,7 +58,7 @@ Built by a developer who personally recovered from 502 storms, 8GB database bloa
 |--------------------------------------|-----------------|-------|
 | Ubuntu 20.04 / 22.04 / 24.04        | apt             | Full support |
 | Debian 11 (Bullseye) / 12 (Bookworm)| apt             | Full support |
-| Amazon Linux 2 / 2023               | dnf             | AWS-aware: Security Group hints, IMDSv2 detection |
+| Amazon Linux 2023 (AL2 best effort, EOL) | dnf / yum  | AWS-aware: Security Group hints, IMDSv2 detection |
 | CentOS 8 / Rocky Linux 8 & 9        | dnf             | SELinux awareness, Remi repo for PHP |
 
 ---
@@ -83,6 +84,10 @@ The interactive wizard walks you through:
 3. **Services toggle** — Redis · Docker · Firewall · SSL · Swap · PHP tuning
 4. **Summary + confirmation** — review everything before a single package is installed
 
+Everything the wizard asks can also be given as a flag (`--stack`, `--php`, `--node`, `--services`, `--domain`, `--email`, `--db-name`, `--db-user`, `--swap-size`, `--redis-conn`, `--open-ports`, `--ssh-port`, `--hostname`, `--timezone`, `--disable-root-ssh`, `--non-interactive`) or `PULSE_*` environment variable. See `bash bootstrap.sh --help`.
+
+To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh --yes` (dry-run without `--yes`; databases and Docker data are kept unless `--purge-data`).
+
 ---
 
 ## 📁 Project Structure
@@ -90,7 +95,12 @@ The interactive wizard walks you through:
 ```
 PulseDeploy/
 ├── bootstrap.sh              # Main entry point & interactive wizard
+├── revert.sh                 # Roll back what bootstrap.sh installed (dry-run by default)
+├── tests/run.sh              # Unit tests for helpers + CLI validation
 ├── scripts/
+│   ├── lib/                  # Shared helpers (logging, validation, pkg/service/config)
+│   │   ├── common.sh
+│   │   └── web.sh            # nginx/apache/PHP layout, health checks
 │   ├── os/                   # OS-specific package management
 │   │   ├── ubuntu.sh
 │   │   ├── debian.sh
@@ -106,7 +116,8 @@ PulseDeploy/
 │       ├── docker.sh         # Docker Engine + Compose v2
 │       ├── certbot.sh        # Let's Encrypt SSL + auto-renewal
 │       ├── swap.sh           # Auto-sized swap file
-│       └── php_tune.sh       # PHP-FPM + OPcache + php.ini tuning
+│       ├── mysql.sh          # MySQL/MariaDB install + hardening + DB/user creation
+│       └── php_tune.sh       # PHP-FPM + OPcache + php.ini tuning (drop-in files)
 ├── config/
 │   ├── nginx/default.conf    # Production Nginx template
 │   └── apache/vhost.conf     # Production Apache vhost template
@@ -122,7 +133,7 @@ When running on Amazon Linux 2 / 2023, PulseDeploy automatically:
 - Detects the EC2 instance via **IMDSv2**
 - Warns you to open **ports 80/443/22** in your **Security Group** (OS-level firewall rules alone are not enough on AWS)
 - Uses `firewalld` instead of `ufw`
-- Falls back to MariaDB if the MySQL repo is unavailable
+- Uses the distribution's MariaDB/MySQL packages (no third-party repo required)
 
 **Recommended EC2 setup before running:**
 
@@ -154,7 +165,7 @@ Every stack is deployed with hardened defaults out of the box:
 
 ## 🧩 Running Individual Modules
 
-Every module is independently sourceable — no need to run the full wizard:
+Every module is independently sourceable — no need to run the full wizard. Settings are plain variables (`PHP_VER`, `SWAP_SIZE`, `REDIS_CONN`, `DOMAIN`, …); run as root:
 
 ```bash
 # Install only Redis on an existing server
@@ -177,8 +188,8 @@ install_docker
 
 ## 📋 Post-Install Checklist
 
-- [ ] Delete `/var/www/html/info.php` after verifying PHP works
-- [ ] Run `certbot --nginx -d yourdomain.com` to issue SSL certificate
+- [ ] SSL: pass `--domain` + `--email` with the `certbot` service, or run `certbot --nginx -d yourdomain.com`
+- [ ] Upload your site to `/var/www/html` (a placeholder page is there until you do)
 - [ ] Point your domain DNS A record to your server IP
 - [ ] Review fail2ban: `fail2ban-client status sshd`
 - [ ] Check firewall rules: `ufw status` or `firewall-cmd --list-all`
@@ -187,9 +198,22 @@ install_docker
 
 ---
 
+## 🛡️ Reliability Notes
+
+- **Verified, not assumed.** LEMP/LAMP run an end-to-end HTTP → PHP check (using a throw-away file, no `phpinfo()` is left exposed); Redis, Docker, MySQL and swap are each confirmed working before being reported as done.
+- **Safe defaults.** MySQL root gets a random password (saved to `/root/.my.cnf`, `chmod 600`) and *requires* it; the firewall always keeps every SSH port open and never resets your existing rules; `--disable-root-ssh` refuses unless another sudo user with an SSH key exists; Docker's weekly cleanup never touches volumes.
+- **Fails loudly.** Any failure prints the function, file:line and command, then exits non-zero. Unknown flags and invalid values are rejected before anything is changed.
+- **Non-interactive by design.** Flags/env vars cover every choice the wizard asks; with no terminal (cloud-init) it switches to non-interactive automatically.
+- **Requirements.** A real VM/VPS with systemd (not a Docker container), 2 GB free disk, root. Port 80 must not be held by another web server.
+
+### Testing status
+
+Unit tests: `bash tests/run.sh` (no root, no network). The Ubuntu path (LEMP, LAMP, Node, Redis, swap, PHP tuning, fail2ban, SSH hardening, revert) has been exercised end to end on Ubuntu 24.04. **Debian, Rocky/Alma/RHEL and Amazon Linux code paths follow the same design but have not been run on real machines yet** — please report issues using the bug template.
+
+---
+
 ## 🗺️ Roadmap
 
-- [ ] `--non-interactive` flag mode for cloud-init / user-data bootstrapping
 - [ ] WordPress fast-deploy module (on top of LEMP)
 - [ ] `healthcheck.sh` — audit an existing server's config and services
 - [ ] PostgreSQL stack option

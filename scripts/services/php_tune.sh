@@ -1,98 +1,109 @@
 #!/usr/bin/env bash
-# Service: PHP-FPM performance tuning
+# Service: PHP-FPM / php.ini / OPcache performance tuning
+# shellcheck source=scripts/lib/web.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
+
 tune_php_fpm() {
-  section "PHP-FPM Performance Tuning"
+  section "PHP Performance Tuning"
 
-  # Detect PHP version in use
-  PHP_VER="${PHP_VER:-$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null)}"
-  [[ -z "$PHP_VER" ]] && { warn "PHP not found, skipping tuning."; return 0; }
+  # Use the PHP that is really installed (Debian keeps one dir per version).
+  local detected=""
+  if [[ "$PKG_MANAGER" == "apt" ]]; then
+    if [[ -n "${PHP_VER:-}" && -d "/etc/php/${PHP_VER}" ]]; then
+      detected="$PHP_VER"
+    else
+      detected="$(find /etc/php -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -n 1)" || detected=""
+    fi
+  else
+    detected="$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;' 2>/dev/null)" || detected=""
+  fi
+  if [[ -z "$detected" ]]; then
+    warn "PHP not found, skipping tuning."
+    return 0
+  fi
+  PHP_VER="$detected"
+  php_layout
 
-  # Detect RAM
-  local RAM_MB
-  RAM_MB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+  local ram_mb
+  ram_mb="$(total_ram_mb)"
 
-  # Calculate pool values based on RAM
-  local PM_MAX_CHILDREN PM_START PM_MIN_SPARE PM_MAX_SPARE
-  PM_MAX_CHILDREN=$(( RAM_MB / 40 ))   # ~40MB per PHP process
-  [[ $PM_MAX_CHILDREN -lt 5 ]] && PM_MAX_CHILDREN=5
-  PM_START=$(( PM_MAX_CHILDREN / 4 ))
-  [[ $PM_START -lt 2 ]] && PM_START=2
-  PM_MIN_SPARE=$(( PM_MAX_CHILDREN / 4 ))
-  [[ $PM_MIN_SPARE -lt 2 ]] && PM_MIN_SPARE=2
-  PM_MAX_SPARE=$(( PM_MAX_CHILDREN / 2 ))
-  [[ $PM_MAX_SPARE -lt 4 ]] && PM_MAX_SPARE=4
-  info "RAM: ${RAM_MB}MB → pm.max_children=${PM_MAX_CHILDREN}, start=${PM_START}"
+  # ── FPM pool ───────────────────────────────────────────────────────────────
+  # ~100MB of RAM per child leaves headroom for MySQL/Redis/OS on the same box.
+  local max_children=$((ram_mb / 100))
+  ((max_children < 5)) && max_children=5
+  ((max_children > 300)) && max_children=300
+  local min_spare=$((max_children / 4)); ((min_spare < 2)) && min_spare=2
+  local max_spare=$((max_children / 2)); ((max_spare < 4)) && max_spare=4
+  local start=$min_spare
+  info "RAM: ${ram_mb}MB → pm.max_children=${max_children}, start=${start}, spare=${min_spare}-${max_spare}"
 
-  # Find pool config
-  local POOL_CONF
-  POOL_CONF=$(find /etc/php -name "www.conf" 2>/dev/null | head -1)
-  [[ -z "$POOL_CONF" ]] && POOL_CONF="/etc/php/${PHP_VER}/fpm/pool.d/www.conf"
-
-  if [[ -f "$POOL_CONF" ]]; then
-    cp "$POOL_CONF" "${POOL_CONF}.bak"
-    sed -i "s|^pm = .*|pm = dynamic|"                                             "$POOL_CONF"
-    sed -i "s|^pm.max_children = .*|pm.max_children = ${PM_MAX_CHILDREN}|"        "$POOL_CONF"
-    sed -i "s|^pm.start_servers = .*|pm.start_servers = ${PM_START}|"             "$POOL_CONF"
-    sed -i "s|^pm.min_spare_servers = .*|pm.min_spare_servers = ${PM_MIN_SPARE}|" "$POOL_CONF"
-    sed -i "s|^pm.max_spare_servers = .*|pm.max_spare_servers = ${PM_MAX_SPARE}|" "$POOL_CONF"
-    sed -i "s|^;pm.max_requests = .*|pm.max_requests = 500|"                      "$POOL_CONF"
-    log "PHP-FPM pool tuned in $POOL_CONF"
+  local pool_changed=0
+  if [[ -f "$PHP_POOL_CONF" ]]; then
+    backup_file "$PHP_POOL_CONF"
+    conf_set "$PHP_POOL_CONF" "pm" "dynamic" " = "
+    conf_set "$PHP_POOL_CONF" "pm.max_children" "$max_children" " = "
+    conf_set "$PHP_POOL_CONF" "pm.start_servers" "$start" " = "
+    conf_set "$PHP_POOL_CONF" "pm.min_spare_servers" "$min_spare" " = "
+    conf_set "$PHP_POOL_CONF" "pm.max_spare_servers" "$max_spare" " = "
+    conf_set "$PHP_POOL_CONF" "pm.max_requests" "500" " = "
+    pool_changed=1
+    log "PHP-FPM pool tuned in $PHP_POOL_CONF"
+  else
+    info "No PHP-FPM pool config found (mod_php setup?) — tuning php.ini only"
   fi
 
-  # ── OPcache config ────────────────────────────────────────────────────────
-  # FIX: the previous version used
-  #   cat > "$primary_path" 2>/dev/null || cat > "$fallback_path" <<EOF ... EOF
-  # The heredoc only binds to the SECOND `cat`, so the first `cat` (the one
-  # that actually runs in almost every case, since the mods-available dir
-  # normally exists right after installing PHP) had no input at all. That
-  # either hangs the whole bootstrap waiting on stdin, or silently writes an
-  # empty opcache.ini depending on how stdin is wired up when the script runs.
-  # Fixed by deciding the target path FIRST, then writing to it with a single
-  # heredoc that's unambiguously attached to one command.
-  local OPCACHE_CONF
-  OPCACHE_CONF=$(find /etc/php -name "opcache.ini" 2>/dev/null | head -1)
-  [[ -z "$OPCACHE_CONF" ]] && OPCACHE_CONF="/etc/php/${PHP_VER}/mods-available/opcache.ini"
+  # ── php.ini + OPcache as a drop-in, never editing package-owned files ──────
+  # (Overwriting the package's opcache.ini would drop its zend_extension line
+  # and silently disable OPcache.)
+  local opcache_mem=$((ram_mb / 8))
+  ((opcache_mem < 64)) && opcache_mem=64
+  ((opcache_mem > 256)) && opcache_mem=256
 
-  local OPCACHE_MEM=$(( RAM_MB / 8 ))
-  [[ $OPCACHE_MEM -lt 64  ]] && OPCACHE_MEM=64
-  [[ $OPCACHE_MEM -gt 256 ]] && OPCACHE_MEM=256
+  local -a written=()
+  local d
+  for d in "${PHP_INI_DIRS[@]}"; do
+    cat >"$d/99-pulsedeploy.ini" <<INI
+; Managed by PulseDeploy — remove this file to undo
+expose_php = Off
+memory_limit = 256M
+upload_max_filesize = 64M
+post_max_size = 64M
+max_execution_time = 300
 
-  local OPCACHE_TARGET="$OPCACHE_CONF"
-  if [[ ! -d "$(dirname "$OPCACHE_CONF")" ]]; then
-    OPCACHE_TARGET="/tmp/opcache-tune.ini"
-    warn "PHP mods-available dir not found — writing tuned config to $OPCACHE_TARGET instead"
-    warn "Copy it into place manually, e.g.: sudo cp $OPCACHE_TARGET /etc/php/${PHP_VER}/mods-available/opcache.ini && sudo phpenmod opcache"
+opcache.enable = 1
+opcache.enable_cli = 0
+opcache.memory_consumption = ${opcache_mem}
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = 10000
+opcache.revalidate_freq = 60
+opcache.jit_buffer_size = 64M
+opcache.jit = tracing
+INI
+    written+=("$d/99-pulsedeploy.ini")
+  done
+  if ((${#written[@]})); then
+    log "php.ini + OPcache (${opcache_mem}MB, JIT tracing) tuned via ${written[*]}"
+  else
+    warn "No PHP conf.d directory found — php.ini/OPcache tuning skipped."
   fi
 
-  cat > "$OPCACHE_TARGET" <<OPCACHE
-opcache.enable=1
-opcache.enable_cli=0
-opcache.memory_consumption=${OPCACHE_MEM}
-opcache.interned_strings_buffer=16
-opcache.max_accelerated_files=10000
-opcache.revalidate_freq=60
-opcache.fast_shutdown=1
-opcache.jit_buffer_size=64M
-opcache.jit=tracing
-OPCACHE
-  log "OPcache tuned: ${OPCACHE_MEM}MB memory + JIT tracing enabled (${OPCACHE_TARGET})"
-
-  # ── PHP.ini hardening ─────────────────────────────────────────────────────
-  local PHP_INI
-  PHP_INI=$(find /etc/php -name "php.ini" -path "*/fpm/*" 2>/dev/null | head -1)
-  if [[ -f "$PHP_INI" ]]; then
-    cp "$PHP_INI" "${PHP_INI}.bak"
-    sed -i 's|^expose_php = .*|expose_php = Off|'                 "$PHP_INI"
-    sed -i 's|^upload_max_filesize = .*|upload_max_filesize = 64M|' "$PHP_INI"
-    sed -i 's|^post_max_size = .*|post_max_size = 64M|'            "$PHP_INI"
-    sed -i 's|^max_execution_time = .*|max_execution_time = 300|'  "$PHP_INI"
-    sed -i 's|^memory_limit = .*|memory_limit = 256M|'             "$PHP_INI"
-    log "PHP.ini hardened (expose_php off, memory 256M, upload 64M)"
+  # ── Validate before restarting; roll back on failure ───────────────────────
+  if [[ "$pool_changed" -eq 1 ]] && command -v "$PHP_FPM_BIN" &>/dev/null; then
+    if ! "$PHP_FPM_BIN" -t; then
+      cp -a "${PHP_POOL_CONF}.pulsedeploy.bak" "$PHP_POOL_CONF"
+      ((${#written[@]})) && rm -f "${written[@]}"
+      error "PHP-FPM rejected the tuned configuration; original files were restored."
+    fi
   fi
 
-  # Restart PHP-FPM
-  systemctl restart "php${PHP_VER}-fpm" 2>/dev/null || \
-    systemctl restart php-fpm 2>/dev/null || true
-  log "PHP-FPM restarted"
+  if svc_exists "$PHP_FPM_SVC"; then
+    svc_restart "$PHP_FPM_SVC"
+    log "PHP-FPM restarted"
+  fi
+  local apache_svc
+  if apache_svc="$(svc_first_existing apache2 httpd)" && svc_active "$apache_svc"; then
+    svc_restart "$apache_svc"
+    log "$apache_svc restarted (mod_php picks up new php.ini settings)"
+  fi
   return 0
 }
