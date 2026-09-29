@@ -30,20 +30,20 @@ setup_swap() {
   valid_swap_size "$size" || error "Invalid swap size '$size' (examples: 512M, 2G)."
   local size_mb
   size_mb="$(_swap_size_mb "$size")"
-  info "Detected RAM: ${ram_mb}MB — creating ${size} swap file at /swapfile"
+  info "Detected RAM: ${ram_mb}MB - creating ${size} swap file at /swapfile"
 
   # Never fill the disk: keep at least 1 GB free after creating the file.
   local free_mb
   free_mb="$(df -Pm / | awk 'NR == 2 { print $4 }')"
   if ((free_mb < size_mb + 1024)); then
-    warn "Not enough free disk (${free_mb}MB free) for a ${size} swap file plus 1GB headroom — skipping swap."
+    warn "Not enough free disk (${free_mb}MB free) for a ${size} swap file plus 1GB headroom - skipping swap."
     return 0
   fi
 
   if [[ -e /swapfile ]]; then
     # Reuse it if it is already a swap area, otherwise refuse to touch it.
     if [[ "$(blkid -p -o value -s TYPE /swapfile 2>/dev/null || true)" == "swap" ]]; then
-      info "/swapfile is already a swap area — enabling it"
+      info "/swapfile is already a swap area - enabling it"
     else
       error "/swapfile exists but is not a swap area; move it away and re-run."
     fi
@@ -58,7 +58,7 @@ setup_swap() {
 
   # Containers (LXC/OpenVZ) and some filesystems refuse swapon: don't fail the run.
   if ! swapon /swapfile 2>/dev/null; then
-    warn "swapon /swapfile failed (container or unsupported filesystem?) — removing the file."
+    warn "swapon /swapfile failed (container or unsupported filesystem?) - removing the file."
     rm -f /swapfile
     return 0
   fi

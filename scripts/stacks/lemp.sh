@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stack: LEMP — Nginx + PHP-FPM + MySQL/MariaDB
+# Stack: LEMP - Nginx + PHP-FPM + MySQL/MariaDB
 # shellcheck source=scripts/lib/web.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 # shellcheck source=scripts/services/mysql.sh
@@ -37,7 +37,7 @@ install_lemp() {
   install_mysql
 
   # ── Verify end to end ──────────────────────────────────────────────────────
-  web_check_php || warn "LEMP installed, but the PHP health check failed — see messages above."
+  web_check_php || warn "LEMP installed, but the PHP health check failed - see messages above."
   log "LEMP stack installation complete ✔"
   return 0
 }

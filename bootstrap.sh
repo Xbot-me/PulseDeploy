@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — VPS & AWS Server Setup Script
+# PulseDeploy - VPS & AWS Server Setup Script
 # Author  : Mustafizur Rahman (@Xbot-me)
 # Repo    : https://github.com/Xbot-me/PulseDeploy
 # License : MIT
 # =============================================================================
-# -E makes the ERR trap fire inside functions too — without it failures in any
-# function exit silently, which is exactly how earlier versions "just stopped".
+# -E so the ERR trap also fires inside functions.
 set -Eeuo pipefail
 
 if ((BASH_VERSINFO[0] < 4)); then
@@ -39,7 +38,7 @@ handle_error() {
     echo -e "${RED}  Command    :${RESET} $last_cmd"
     echo -e "${RED}  Exit code  :${RESET} $exit_code"
     echo -e "${RED}  Log file   :${RESET} $LOG_FILE"
-    echo -e "${YELLOW}  Nothing after this point ran. Fix the cause and re-run — PulseDeploy is safe to run again.${RESET}\n"
+    echo -e "${YELLOW}  Nothing after this point ran. Fix the cause and re-run - PulseDeploy is safe to run again.${RESET}\n"
   } >&2
   exit "$exit_code"
 }
@@ -200,7 +199,7 @@ EOF
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 need_value() {
-  [[ $# -ge 2 && -n "$2" ]] || error "Option $1 requires a value — run --help for usage"
+  [[ $# -ge 2 && -n "$2" ]] || error "Option $1 requires a value - run --help for usage"
   return 0
 }
 
@@ -234,7 +233,7 @@ parse_args() {
       -y|--non-interactive)  NON_INTERACTIVE=1;                                    shift   ;;
       -h|--help)             print_help; exit 0 ;;
       -v|--version)          echo "PulseDeploy v${BOOTSTRAP_VERSION}"; exit 0 ;;
-      *) error "Unknown option: $1 — run --help for usage" ;;
+      *) error "Unknown option: $1 - run --help for usage" ;;
     esac
   done
   STACK="${STACK,,}"
@@ -365,13 +364,13 @@ disable_root_ssh() {
     warn "sshd rejected the new configuration; it was rolled back. Root login unchanged."
     return 0
   fi
-  systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || warn "Could not reload sshd — change applies after the next restart."
+  systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || warn "Could not reload sshd - change applies after the next restart."
   local effective=""
   effective="$(sshd -T 2>/dev/null | awk 'tolower($1) == "permitrootlogin" { print $2 }')" || true
   if [[ "$effective" == "no" || -z "$effective" ]]; then
     log "Root SSH login disabled (admin user with key: $found)"
   else
-    warn "sshd still reports PermitRootLogin=$effective — another config file overrides it."
+    warn "sshd still reports PermitRootLogin=$effective - another config file overrides it."
   fi
   return 0
 }
@@ -399,9 +398,8 @@ setup_logging() {
   return 0
 }
 
-# PID-file lock. (Not flock on a file descriptor: daemons started during the
-# install — PM2, database servers under a non-systemd init — would inherit the
-# descriptor and keep the lock held forever.)
+# PID-file lock. flock on a descriptor is avoided on purpose: daemons started
+# during the install (PM2, DB servers) would inherit it and hold the lock.
 LOCK_FILE="/run/lock/pulsedeploy.pid"
 release_lock() {
   if [[ -f "$LOCK_FILE" && "$(cat "$LOCK_FILE" 2>/dev/null)" == "$$" ]]; then
@@ -438,10 +436,10 @@ preflight() {
   fi
   local free_mb ram_mb arch
   free_mb="$(df -Pm / | awk 'NR == 2 { print $4 }')"
-  ((free_mb >= 2048)) || error "Only ${free_mb}MB free on / — at least 2048MB is required."
+  ((free_mb >= 2048)) || error "Only ${free_mb}MB free on / - at least 2048MB is required."
   ram_mb="$(total_ram_mb)"
   if ((ram_mb < 900)) && [[ "${SERVICES[swap]}" -eq 0 && "$NON_INTERACTIVE" -eq 1 ]]; then
-    warn "Only ${ram_mb}MB RAM and swap is not selected — package installs can be OOM-killed. Consider --services swap."
+    warn "Only ${ram_mb}MB RAM and swap is not selected - package installs can be OOM-killed. Consider --services swap."
   fi
   arch="$(uname -m)"
   [[ "$arch" == "x86_64" || "$arch" == "aarch64" ]] || warn "Untested CPU architecture: $arch"
@@ -490,13 +488,13 @@ prompt() {
   local var="$1" label="$2" def="$3" validator="${4:-}" val=""
   while true; do
     read -rp "$(echo -e "${CYAN}${label} [${def:-none}]:${RESET} ")" val ||
-      error "Input closed — re-run with --non-interactive and flags."
+      error "Input closed - re-run with --non-interactive and flags."
     val="${val:-$def}"
     if [[ -z "$validator" ]] || "$validator" "$val"; then
       printf -v "$var" '%s' "$val"
       return 0
     fi
-    warn "Invalid value '$val' — try again."
+    warn "Invalid value '$val' - try again."
   done
 }
 
@@ -514,22 +512,22 @@ select_stack() {
     return 0
   fi
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    warn "No --stack given in non-interactive mode — installing core packages only (stack: none)."
+    warn "No --stack given in non-interactive mode - installing core packages only (stack: none)."
     STACK="none"
     return 0
   fi
 
   section "Stack Selection"
   echo -e "Choose a server stack to install:\n"
-  echo -e "  ${BOLD}1)${RESET} LEMP  — Nginx + PHP-FPM + MySQL"
-  echo -e "  ${BOLD}2)${RESET} LAMP  — Apache + PHP + MySQL"
-  echo -e "  ${BOLD}3)${RESET} Node  — Nginx + Node.js (with PM2)"
-  echo -e "  ${BOLD}4)${RESET} Skip  — Core services only"
+  echo -e "  ${BOLD}1)${RESET} LEMP  - Nginx + PHP-FPM + MySQL"
+  echo -e "  ${BOLD}2)${RESET} LAMP  - Apache + PHP + MySQL"
+  echo -e "  ${BOLD}3)${RESET} Node  - Nginx + Node.js (with PM2)"
+  echo -e "  ${BOLD}4)${RESET} Skip  - Core services only"
   echo ""
   local choice=""
   while [[ -z "$STACK" ]]; do
     read -rp "$(echo -e "${CYAN}Enter choice [1-4]:${RESET} ")" choice ||
-      error "Input closed — re-run with --non-interactive and flags."
+      error "Input closed - re-run with --non-interactive and flags."
     case "$choice" in
       1) STACK="lemp" ;;
       2) STACK="lamp" ;;
@@ -598,18 +596,18 @@ check_consistency() {
   local web=0
   [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && web=1
   if [[ "${SERVICES[phptune]}" -eq 1 && "$web" -eq 0 ]]; then
-    warn "phptune needs the lemp or lamp stack — it will be skipped."
+    warn "phptune needs the lemp or lamp stack - it will be skipped."
     SERVICES[phptune]=0
   fi
   if [[ -n "$DB_NAME" && "$web" -eq 0 ]]; then
-    warn "--db-name/--db-user only apply to lemp/lamp stacks — ignored."
+    warn "--db-name/--db-user only apply to lemp/lamp stacks - ignored."
     DB_NAME=""; DB_USER=""
   fi
   if [[ "${SERVICES[certbot]}" -eq 1 && -n "$DOMAIN" && -z "$EMAIL" ]]; then
     warn "Certbot will be installed but no certificate requested: --email is missing."
   fi
   if [[ -n "$DOMAIN" && "${SERVICES[certbot]}" -eq 0 && "$STACK" != "none" ]]; then
-    info "Domain set without the certbot service — site will serve plain HTTP."
+    info "Domain set without the certbot service - site will serve plain HTTP."
   fi
   return 0
 }
@@ -648,7 +646,7 @@ confirm_install() {
   echo ""
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    log "Non-interactive mode — proceeding automatically"
+    log "Non-interactive mode - proceeding automatically"
     return 0
   fi
   local confirm=""
@@ -658,7 +656,7 @@ confirm_install() {
   return 0
 }
 
-# Checks that depend on the chosen stack — run before ANY change is made.
+# Checks that depend on the chosen stack - run before ANY change is made.
 preflight_stack() {
   [[ "${PULSE_SKIP_PREFLIGHT:-0}" == "1" ]] && return 0
   # shellcheck source=scripts/lib/web.sh
@@ -742,7 +740,7 @@ main() {
 
   # Without a terminal there is nobody to answer prompts.
   if [[ "$NON_INTERACTIVE" -ne 1 && ! -t 0 ]]; then
-    warn "stdin is not a terminal — switching to non-interactive mode."
+    warn "stdin is not a terminal - switching to non-interactive mode."
     NON_INTERACTIVE=1
   fi
 

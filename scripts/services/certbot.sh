@@ -24,7 +24,7 @@ install_certbot() {
   mkdir -p /etc/letsencrypt/renewal-hooks/deploy
   cat >/etc/letsencrypt/renewal-hooks/deploy/pulsedeploy-reload.sh <<'HOOK'
 #!/bin/sh
-# Installed by PulseDeploy — reload whichever web server is running.
+# Installed by PulseDeploy - reload whichever web server is running.
 for s in nginx apache2 httpd; do
   systemctl is-active --quiet "$s" && systemctl reload "$s"
 done
@@ -72,7 +72,7 @@ _certbot_issue() {
   elif command -v apache2ctl &>/dev/null || command -v httpd &>/dev/null; then
     plugin="--apache"
   else
-    info "No web server configured by PulseDeploy — skipping automatic certificate."
+    info "No web server configured by PulseDeploy - skipping automatic certificate."
     return 0
   fi
   info "Requesting a certificate for ${DOMAIN} ..."

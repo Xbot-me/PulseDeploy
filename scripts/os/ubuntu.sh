@@ -22,7 +22,7 @@ os_install_base() {
   return 0
 }
 
-# Ondřej Surý's PPA — only needed when Ubuntu's own archive lacks the version.
+# Ondřej Surý's PPA - only needed when Ubuntu's own archive lacks the version.
 os_get_php_repo() {
   add-apt-repository -y ppa:ondrej/php
   retry 3 10 apt_get update

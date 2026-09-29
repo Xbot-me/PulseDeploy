@@ -91,7 +91,7 @@ _setup_fail2ban() {
 
   # sshd log source. The distribution default for the sshd jail is usually the
   # systemd journal; if fail2ban's own Python cannot load that binding, the jail
-  # (and with it the whole service) would fail to start — so fall back to a
+  # (and with it the whole service) would fail to start - so fall back to a
   # plain log file and make sure one exists.
   local f2b_py ssh_backend="" ssh_logpath="" logf
   f2b_py="$(head -n 1 "$(command -v fail2ban-server)" 2>/dev/null | sed 's/^#! *//; s/ .*//')" || f2b_py=""
@@ -119,8 +119,8 @@ _setup_fail2ban() {
 
   local jail="/etc/fail2ban/jail.d/zz-pulsedeploy.conf"
   mkdir -p /etc/fail2ban/jail.d
-  # Retire the file old versions of PulseDeploy wrote (enabled jails whose log
-  # files might not exist, which crashes fail2ban).
+  # Move aside the jail.local written by early versions (it enabled jails whose
+  # log files may not exist).
   if [[ -f /etc/fail2ban/jail.local ]] && grep -q 'nginx-limit-req' /etc/fail2ban/jail.local &&
      grep -q 'apache-badbots' /etc/fail2ban/jail.local; then
     mv /etc/fail2ban/jail.local /etc/fail2ban/jail.local.pulsedeploy.bak
@@ -153,18 +153,18 @@ F2B
   } >"$jail"
 
   if ! fail2ban-client -t &>/dev/null; then
-    warn "fail2ban rejected the extended jail set — retrying with SSH protection only"
+    warn "fail2ban rejected the extended jail set - retrying with SSH protection only"
     printf '[sshd]\nenabled  = true\nport     = %s\nmaxretry = 3\nbantime  = 86400\n%s\n%s\n' \
       "$ssh_port_csv" "$ssh_backend" "$ssh_logpath" >"$jail"
   fi
   if ! fail2ban-client -t &>/dev/null; then
     rm -f "$jail"
-    warn "fail2ban configuration test still failing — leaving fail2ban with distribution defaults."
+    warn "fail2ban configuration test still failing - leaving fail2ban with distribution defaults."
     fail2ban-client -t 2>&1 | tail -n 5 >&2 || true
   fi
 
   if ! svc_restart fail2ban; then
-    warn "fail2ban would not start with PulseDeploy's jails — retrying with the distribution defaults"
+    warn "fail2ban would not start with PulseDeploy's jails - retrying with the distribution defaults"
     rm -f "$jail"
     svc_restart fail2ban || error "fail2ban does not start even with default settings; see the status output above."
     warn "fail2ban is running with distribution defaults only (PulseDeploy jails removed)."

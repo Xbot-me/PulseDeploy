@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PulseDeploy — revert.sh
+# PulseDeploy - revert.sh
 # Rolls back changes made by bootstrap.sh, component by component.
 # Detection-based (checks what's actually present), works on apt and dnf/yum
 # systems. Defaults to a DRY RUN; databases, Redis dumps and Docker data are
@@ -54,7 +54,7 @@ ${BOLD}USAGE${RESET}
 
 ${BOLD}DESCRIPTION${RESET}
   Reverts changes made by bootstrap.sh. Detects what's actually installed
-  on this box (not log-based) and removes it. Defaults to a DRY RUN — no
+  on this box (not log-based) and removes it. Defaults to a DRY RUN - no
   changes are made unless you pass --yes.
 
 ${BOLD}COMPONENT FLAGS${RESET} (omit all to target everything detected)
@@ -68,7 +68,7 @@ ${BOLD}COMPONENT FLAGS${RESET} (omit all to target everything detected)
   --all            Target every component above
 
 ${BOLD}BEHAVIOUR${RESET}
-  --yes            Actually apply changes (required — default is dry-run)
+  --yes            Actually apply changes (required - default is dry-run)
   --no-confirm     Skip the typed-YES prompts for firewall/stack (automation)
   --purge-data     ALSO delete data: /var/lib/mysql, /var/lib/redis,
                    /var/lib/docker, /var/lib/containerd  (irreversible)
@@ -106,7 +106,7 @@ parse_args() {
       --purge-certs)  PURGE_CERTS=1; shift ;;
       --list)         LIST_ONLY=1; shift ;;
       -h|--help)      print_help; exit 0 ;;
-      *) error "Unknown option: $1 — run --help for usage" ;;
+      *) error "Unknown option: $1 - run --help for usage" ;;
     esac
   done
   # No components explicitly picked -> target everything detected
@@ -136,7 +136,7 @@ run_or_echo() {
 
 applied() { [[ "$DRY_RUN" -eq 0 ]]; }
 
-# installed_matching <pattern>... — names of installed packages matching globs
+# installed_matching <pattern>... - names of installed packages matching globs
 installed_matching() {
   case "$PKG_MANAGER" in
     apt)
@@ -196,8 +196,8 @@ detected_firewall() {
 }
 detected_fail2ban() { any_installed fail2ban; }
 detected_certbot()  { command -v certbot &>/dev/null; }
-# Only swap that PulseDeploy created: its sysctl file is the marker (older
-# versions wrote the same two values without the comment).
+# Only swap created by PulseDeploy: its sysctl file is the marker (early
+# versions wrote the same values without the comment line).
 detected_swap() {
   [[ -f /swapfile && -f /etc/sysctl.d/99-swap.conf ]] &&
     grep -Eq 'Managed by PulseDeploy|vm\.vfs_cache_pressure=50' /etc/sysctl.d/99-swap.conf
@@ -236,7 +236,7 @@ show_status() {
 
 # ── Revert functions ──────────────────────────────────────────────────────
 revert_docker() {
-  if ! detected_docker; then info "Docker not detected — skipping"; return 0; fi
+  if ! detected_docker; then info "Docker not detected - skipping"; return 0; fi
   section "Reverting Docker"
   stop_units docker.socket docker containerd
   remove_matching purge docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
@@ -259,7 +259,7 @@ revert_docker() {
 }
 
 revert_redis() {
-  if ! detected_redis; then info "Redis not detected — skipping"; return 0; fi
+  if ! detected_redis; then info "Redis not detected - skipping"; return 0; fi
   section "Reverting Redis"
   stop_units redis-server redis
   remove_matching purge redis-server redis-tools redis redis6 redis7
@@ -278,7 +278,7 @@ revert_firewall() {
   if command -v firewall-cmd &>/dev/null && svc_active firewalld; then have_firewalld=1; fi
   detected_fail2ban && have_f2b=1
   if [[ "$have_ufw" -eq 0 && "$have_firewalld" -eq 0 && "$have_f2b" -eq 0 ]]; then
-    info "No active ufw/firewalld/fail2ban detected — skipping"
+    info "No active ufw/firewalld/fail2ban detected - skipping"
     return 0
   fi
   section "Reverting Firewall"
@@ -301,7 +301,7 @@ revert_firewall() {
 }
 
 revert_certbot() {
-  if ! detected_certbot; then info "Certbot not detected — skipping"; return 0; fi
+  if ! detected_certbot; then info "Certbot not detected - skipping"; return 0; fi
   section "Reverting Certbot"
   stop_units certbot.timer certbot-renew.timer
   if command -v snap &>/dev/null && snap list certbot &>/dev/null; then
@@ -319,17 +319,17 @@ revert_certbot() {
     fi
   fi
   if [[ "$PURGE_CERTS" -eq 1 ]]; then
-    warn "Deleting certificates in /etc/letsencrypt — this is irreversible"
+    warn "Deleting certificates in /etc/letsencrypt - this is irreversible"
     run_or_echo rm -rf /etc/letsencrypt
   else
-    info "Certificates left in place — pass --purge-certs to also delete them"
+    info "Certificates left in place - pass --purge-certs to also delete them"
   fi
   if applied; then log "Certbot removed"; else info "(dry-run) would remove Certbot"; fi
   return 0
 }
 
 revert_swap() {
-  if ! detected_swap; then info "No PulseDeploy-created swap file detected — skipping"; return 0; fi
+  if ! detected_swap; then info "No PulseDeploy-created swap file detected - skipping"; return 0; fi
   section "Reverting Swap"
   if [[ -n "$(swapon --show=NAME --noheadings 2>/dev/null | grep -x '/swapfile' || true)" ]]; then
     run_or_echo swapoff /swapfile
@@ -347,7 +347,7 @@ revert_swap() {
 }
 
 revert_phptune() {
-  if ! detected_phptune; then info "No PHP tuning detected — skipping"; return 0; fi
+  if ! detected_phptune; then info "No PHP tuning detected - skipping"; return 0; fi
   section "Reverting PHP Tuning"
   local f
   for f in /etc/php/*/*/conf.d/99-pulsedeploy.ini /etc/php.d/99-pulsedeploy.ini; do
@@ -374,7 +374,7 @@ revert_stack() {
   detected_php    && any=1
   detected_mysql  && any=1
   detected_node   && any=1
-  if [[ "$any" -eq 0 ]]; then info "No stack packages detected — skipping"; return 0; fi
+  if [[ "$any" -eq 0 ]]; then info "No stack packages detected - skipping"; return 0; fi
 
   section "Reverting Stack Packages"
   warn "This removes web server / DB / runtime packages. Site content in"
@@ -449,13 +449,13 @@ main() {
   exec > >(tee -a "$LOG_FILE") 2>&1
 
   echo -e "${BOLD}${CYAN}PulseDeploy revert.sh v${REVERT_VERSION}${RESET}"
-  [[ "$PKG_MANAGER" != "unknown" ]] || error "Neither apt nor dnf/yum found — unsupported system."
+  [[ "$PKG_MANAGER" != "unknown" ]] || error "Neither apt nor dnf/yum found - unsupported system."
 
   show_status
   [[ "$LIST_ONLY" -eq 1 ]] && exit 0
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    warn "DRY RUN — no changes will be made. Re-run with --yes to actually apply."
+    warn "DRY RUN - no changes will be made. Re-run with --yes to actually apply."
   fi
 
   [[ "${TARGET[docker]}"   -eq 1 ]] && revert_docker

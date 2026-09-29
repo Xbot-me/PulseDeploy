@@ -76,7 +76,7 @@ _docker_install_compose_plugin() {
   local want got
   want="$(awk '{ print $1; exit }' "$sums")"
   got="$(sha256sum "$bin" | awk '{ print $1 }')"
-  [[ -n "$want" && "$want" == "$got" ]] || error "Docker Compose checksum mismatch — refusing to install."
+  [[ -n "$want" && "$want" == "$got" ]] || error "Docker Compose checksum mismatch - refusing to install."
   mkdir -p "$dest_dir"
   install -m 0755 "$bin" "$dest_dir/docker-compose"
   rm -f "$bin" "$sums"
@@ -124,7 +124,7 @@ install_docker() {
     log "Added $user to docker group (re-login required)"
   fi
 
-  # ── Weekly cleanup: unused items older than 7 days, NEVER volumes ──────────
+  # ── Weekly cleanup: unused items older than 7 days, never volumes ──────────
   cat >/etc/cron.d/docker-weekly-prune <<'CRON'
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 3 * * 0 root docker system prune -f --filter "until=168h" >> /var/log/docker-prune.log 2>&1

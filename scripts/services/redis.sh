@@ -3,7 +3,7 @@
 # shellcheck source=scripts/lib/web.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 
-# _redis_ping <socket|tcp> <socket-path> — retries for ~10 s
+# _redis_ping <socket|tcp> <socket-path> - retries for ~10 s
 _redis_ping() {
   local mode="$1" sock="$2" i reply=""
   for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -70,7 +70,7 @@ install_redis() {
   # ── Verify (falls back to TCP if the socket cannot be used) ────────────────
   if ! _redis_ping "$conn" "$sock"; then
     if [[ "$conn" == "socket" ]]; then
-      warn "Redis did not answer on $sock — falling back to TCP 127.0.0.1:6379"
+      warn "Redis did not answer on $sock - falling back to TCP 127.0.0.1:6379"
       sed -i '/^unixsocket/d' "$conf"
       conn="tcp"
       svc_restart "$svc"
