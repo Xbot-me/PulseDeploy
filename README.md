@@ -86,7 +86,7 @@ The interactive wizard walks you through:
 
 Everything the wizard asks can also be given as a flag (`--stack`, `--php`, `--node`, `--services`, `--domain`, `--email`, `--db-name`, `--db-user`, `--swap-size`, `--redis-conn`, `--open-ports`, `--ssh-port`, `--hostname`, `--timezone`, `--disable-root-ssh`, `--non-interactive`) or `PULSE_*` environment variable. See `bash bootstrap.sh --help`.
 
-**Laravel API + two Next.js apps on one cheap VPS:** `sudo bash bootstrap.sh --stack laravel-next --domain example.com`. It tunes PHP-FPM, MySQL, Redis and Node for a shared 2-8 GB box, sets up systemd services, a queue worker, backups and a `pulse deploy` / `pulse rollback` command. Full guide and CI examples: [docs/laravel-next.md](docs/laravel-next.md).
+**Laravel API + two Next.js apps on one cheap VPS:** `sudo bash bootstrap.sh --stack laravel-next --domain example.com`. It tunes PHP-FPM, MySQL, Redis and Node for a shared 2-8 GB box, sets up systemd services, a queue worker, backups and a `pulse deploy` / `pulse rollback` command. Full guide and CI examples: [docs/laravel-next.md](docs/laravel-next.md); a worked multi-tenant example is in [docs/aventech-crm.md](docs/aventech-crm.md).
 
 To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh --yes` (dry-run without `--yes`; databases and Docker data are kept unless `--purge-data`).
 

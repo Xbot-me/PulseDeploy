@@ -157,9 +157,25 @@ echo "── laravel-next templates"
 (
   source "$ROOT/scripts/stacks/laravel_next.sh" >/dev/null 2>&1
   out="$TMP/render.out"
-  lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$out" "HOST=api.example.com" "ROOT=/var/www/api/current/public" "PHP_SOCK=/run/php/x&y.sock"
+  lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$out" "HOST=api.example.com" "ROOT=/var/www/api/current/public" "PHP_SOCK=/run/php/x&y.sock" "LOCATIONS=/etc/nginx/pulsedeploy/api-locations.inc" "INTERNAL_PORT=8081"
   grep -q 'server_name api.example.com;' "$out" || exit 1
   grep -q 'unix:/run/php/x&y.sock;' "$out" || exit 2          # '&' must stay literal
+  grep -q 'listen 127.0.0.1:8081;' "$out" || exit 8           # loopback-only internal listener
+  [[ "$(grep -c 'include /etc/nginx/pulsedeploy/api-locations.inc;' "$out")" -eq 2 ]] || exit 9
+  lnx_render "$ROOT/config/laravel-next/nginx-api-locations.inc" "$TMP/loc.out" "PHP_SOCK=/run/php/p.sock"
+  grep -q 'fastcgi_pass unix:/run/php/p.sock;' "$TMP/loc.out" || exit 10
+  # storage lines: removed when off, enabled when on
+  lnx_render "$ROOT/config/laravel-next/nginx-next.conf" "$out" "NAME=shop" "PORT=3000" "SERVER_NAMES=example.com" "STORAGE_DIR=/var/www/api/shared/storage/app/public"
+  sed -i -e '/^#storage# /d' "$out"; grep -q 'location /storage/' "$out" && exit 11
+  lnx_render "$ROOT/config/laravel-next/nginx-next.conf" "$out" "NAME=shop" "PORT=3000" "SERVER_NAMES=example.com" "STORAGE_DIR=/var/www/api/shared/storage/app/public"
+  sed -i -e 's/^#storage# //' "$out"; grep -q 'alias /var/www/api/shared/storage/app/public/;' "$out" || exit 12
+  lnx_render "$ROOT/config/laravel-next/mysql-tuning.cnf" "$out" MAXCONN=50 BP=384 TMP=32 TABLE_CACHE=2000 TABLE_DEF=2000 "BINLOG="
+  grep -q 'table_open_cache *= 2000' "$out" || exit 13
+  lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$out" "HOST=api.example.com" "ROOT=/var/www/api/current/public" "PHP_SOCK=/run/php/x.sock" "LOCATIONS=/x.inc" "INTERNAL_PORT=8081"
+  for p in /login /api/login /api/v1/admin/login /api/v1/forgot-password; do   # throttle must cover the real login paths
+    printf '%s' "$p" | grep -Eq "$(sed -n 's/^ *location ~ \(.*\) {$/\1/p' "$out" | head -n 1)" || exit 14
+  done
+  lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$out" "HOST=api.example.com" "ROOT=/var/www/api/current/public" "PHP_SOCK=/run/php/x&y.sock" "LOCATIONS=/etc/nginx/pulsedeploy/api-locations.inc" "INTERNAL_PORT=8081"
   grep -q '@[A-Z_]*@' "$out" && exit 3                        # no unreplaced markers
   lnx_render "$ROOT/config/laravel-next/nginx-next.conf" "$out" "NAME=shop" "PORT=3000" "SERVER_NAMES=example.com"
   sed -i -e 's/^#shop# //' -e '/^#admin# /d' "$out"
@@ -177,10 +193,13 @@ if command -v nginx >/dev/null 2>&1; then
     d="$TMP/ngx"; mkdir -p "$d/conf.d"
     if [[ -f /etc/nginx/fastcgi_params ]]; then cp /etc/nginx/fastcgi_params "$d/"; else : >"$d/fastcgi_params"; fi
     cp "$ROOT/config/laravel-next/nginx-http.conf" "$d/conf.d/00.conf"
-    lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$d/conf.d/api.conf" "HOST=api.example.com" "ROOT=/tmp" "PHP_SOCK=/tmp/x.sock"
-    lnx_render "$ROOT/config/laravel-next/nginx-next.conf" "$d/conf.d/shop.conf" "NAME=shop" "PORT=3000" "SERVER_NAMES=example.com"
-    sed -i -e 's/^#shop# //' -e '/^#admin# /d' "$d/conf.d/shop.conf"
+    mkdir -p "$d/inc"
+    lnx_render "$ROOT/config/laravel-next/nginx-api-locations.inc" "$d/inc/api-locations.inc" "PHP_SOCK=/tmp/x.sock"
+    lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$d/conf.d/api.conf" "HOST=api.example.com" "ROOT=/tmp" "PHP_SOCK=/tmp/x.sock" "LOCATIONS=$d/inc/api-locations.inc" "INTERNAL_PORT=18081"
+    lnx_render "$ROOT/config/laravel-next/nginx-next.conf" "$d/conf.d/shop.conf" "NAME=shop" "PORT=3000" "SERVER_NAMES=example.com" "STORAGE_DIR=$d"
+    sed -i -e 's/^#shop# //' -e 's/^#storage# //' -e '/^#admin# /d' "$d/conf.d/shop.conf"
     [[ -e /proc/net/if_inet6 ]] || sed -i '/listen \[::\]/d' "$d"/conf.d/*.conf
+    sed -i -e 's/^ *listen 127.0.0.1:18081;/    listen 127.0.0.1:18081;/' "$d/conf.d/api.conf"
     printf 'pid %s/nginx.pid;\nevents {}\nhttp {\n access_log off;\n client_body_temp_path %s/t/body;\n proxy_temp_path %s/t/proxy;\n fastcgi_temp_path %s/t/fcgi;\n uwsgi_temp_path %s/t/uwsgi;\n scgi_temp_path %s/t/scgi;\n include %s/conf.d/*.conf;\n}\n' "$d" "$d" "$d" "$d" "$d" "$d" "$d" >"$d/nginx.conf"
     mkdir -p "$d/cache" "$d/logs" "$d/t"
     sed -i -e "s|/var/cache/nginx/pulse_shop|$d/cache|" "$d/conf.d/00.conf"
@@ -191,6 +210,25 @@ if command -v nginx >/dev/null 2>&1; then
     bad "nginx -t on rendered laravel-next configs" "$(tail -n 3 "$TMP/nginx-t.out")"
   fi
 fi
+
+echo "── tenant database grants"
+(
+  # shellcheck source=scripts/services/mysql.sh
+  source "$ROOT/scripts/services/mysql.sh"
+  mysql() { printf '%s\n' "$*" >"$TMP/mysql.sql"; }        # capture instead of running
+  TENANT_DB_PREFIX=zymerce_tenant_ mysql_grant_tenant_prefix appuser >/dev/null
+  sql="$(cat "$TMP/mysql.sql")"
+  # underscores must be escaped: an unescaped "_" would match any character
+  # shellcheck disable=SC2016  # backticks are literal SQL identifier quotes
+  [[ "$sql" == *'`zymerce\_tenant\_%`.*'* ]] || exit 1
+  [[ "$sql" == *"'appuser'@'localhost'"* ]] || exit 4
+  rm -f "$TMP/mysql.sql"; TENANT_DB_PREFIX="" mysql_grant_tenant_prefix appuser >/dev/null
+  [[ ! -e "$TMP/mysql.sql" ]] || exit 2                     # no prefix, no grant
+  # error() exits, so run the invalid case in its own subshell
+  if ( TENANT_DB_PREFIX="bad;prefix" mysql_grant_tenant_prefix appuser ) >/dev/null 2>&1; then exit 3; fi
+  exit 0
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "tenant prefix grant: pattern escaped, skipped when unset, injection rejected"; else bad "tenant grant (exit $rc)"; fi
 
 echo "── pulse CLI: deploy / rollback / prune (fake services)"
 FB="$TMP/fakebin"; mkdir -p "$FB"
@@ -229,6 +267,16 @@ for x in c d; do sleep 1; pulse deploy shop --artifact "$TMP/$x.tar.gz" >/dev/nu
 n="$(find "$APPS_ROOT/shop/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)"
 if [[ "$n" -le 4 ]]; then ok "old releases pruned (kept $n, KEEP_RELEASES=3 plus the failed one)"; else bad "prune did not run" "$n releases"; fi
 if [[ -d "$(readlink -f "$APPS_ROOT/shop/current")" ]]; then ok "current release survives pruning"; else bad "current release was pruned"; fi
+# api deploy with the queue switched off must not touch the queue service
+mkdir -p "$APPS_ROOT/api/releases" "$APPS_ROOT/api/shared/storage"
+printf 'APP_KEY=base64:x\n' >"$APPS_ROOT/api/shared/.env"
+mkapi() { local d="$TMP/api-src"; rm -rf "$d"; mkdir -p "$d/public" "$d/vendor" "$d/bootstrap"; echo "<?php" >"$d/artisan"; echo "<?php" >"$d/public/index.php"; echo "<?php" >"$d/vendor/autoload.php"; tar -czf "$TMP/api.tar.gz" -C "$d" .; }
+mkapi; printf '#!/bin/sh\nexit 0\n' >"$TMP/fakephp"; chmod +x "$TMP/fakephp"; : >"$TMP/systemctl.log"
+QUEUE_ENABLED=0 SCHEDULER_ENABLED=0 PHP_BIN="$TMP/fakephp" API_HOST=api.example.com pulse deploy api --artifact "$TMP/api.tar.gz" --no-migrate >/dev/null 2>&1
+if grep -q 'pulse-queue' "$TMP/systemctl.log" || grep -q 'pulse-scheduler' "$TMP/systemctl.log"; then bad "queue/scheduler touched although disabled"; else ok "queue and scheduler untouched when disabled"; fi
+: >"$TMP/systemctl.log"; sleep 1
+PHP_BIN="$TMP/fakephp" API_HOST=api.example.com pulse deploy api --artifact "$TMP/api.tar.gz" --no-migrate >/dev/null 2>&1
+if grep -q 'restart pulse-queue.service' "$TMP/systemctl.log"; then ok "queue restarted when enabled"; else bad "queue not restarted when enabled"; fi
 check_not "pulse rejects unknown command"  bash "$ROOT/bin/pulse" frobnicate
 check_not "pulse rejects unknown app"      bash "$ROOT/bin/pulse" deploy nothing --artifact x
 unset PULSE_CONF APPS_ROOT
@@ -253,6 +301,7 @@ check_not "bad open-ports rejected"      "${B[@]}" --open-ports 80,abc
 check_not "unknown service rejected"     "${B[@]}" --services redis,mongo
 check_not "bad api host rejected"        "${B[@]}" --api-host "bad host"
 check_not "bad admin host rejected"      "${B[@]}" --admin-host "x;y"
+check_not "bad tenant prefix rejected"   "${B[@]}" --tenant-db-prefix "a;b"
 check_not "root as app user rejected"    "${B[@]}" --app-user root
 check_not "uppercase app user rejected"  "${B[@]}" --app-user Deploy
 out="$("${B[@]}" --help)"

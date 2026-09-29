@@ -65,6 +65,10 @@ ADMIN_HOST="${PULSE_ADMIN_HOST:-}"
 SHOP_HOST="${PULSE_SHOP_HOST:-}"
 APP_USER="${PULSE_APP_USER:-deploy}"
 CLOUDFLARE="${PULSE_CLOUDFLARE:-0}"
+TENANT_DB_PREFIX="${PULSE_TENANT_DB_PREFIX:-}"
+SERVE_STORAGE="${PULSE_SERVE_STORAGE:-0}"
+NO_QUEUE="${PULSE_NO_QUEUE:-0}"
+NO_SCHEDULER="${PULSE_NO_SCHEDULER:-0}"
 OPEN_PORTS="${PULSE_OPEN_PORTS:-}"
 REDIS_CONN="${PULSE_REDIS_CONN:-}"
 
@@ -157,8 +161,18 @@ ${BOLD}LARAVEL + NEXT.JS STACK${RESET} (--stack laravel-next; requires --domain)
       --shop-host <host>    Next.js storefront  (default: <domain>)
       --app-user <name>     Deploy/runtime user (default: deploy)
       --cloudflare          Restore real client IPs behind Cloudflare
+      --tenant-db-prefix <p> Multi-tenant apps that create one database per store:
+                            let the DB user create/manage databases named <p>*
+                            (for example zymerce_tenant_)
+      --serve-storage       Serve /storage/* on the Next.js hosts straight from the
+                            Laravel public disk (skips Node for uploaded files)
+      --no-queue            Do not run a queue worker (app has no queued jobs)
+      --no-scheduler        Do not run the Laravel scheduler timer
+                            The Next.js apps reach the API without leaving the
+                            machine at http://127.0.0.1:8081 (loopback only).
                             Env: PULSE_API_HOST, PULSE_ADMIN_HOST, PULSE_SHOP_HOST,
-                            PULSE_APP_USER, PULSE_CLOUDFLARE=1
+                            PULSE_APP_USER, PULSE_CLOUDFLARE=1, PULSE_TENANT_DB_PREFIX,
+                            PULSE_SERVE_STORAGE=1, PULSE_NO_QUEUE=1, PULSE_NO_SCHEDULER=1
 
 ${BOLD}DATABASE${RESET}
       --db-name <name>      Create a database with this name (LEMP/LAMP)
@@ -248,6 +262,10 @@ parse_args() {
          --shop-host)        need_value "$@"; SHOP_HOST="$2";                      shift 2 ;;
          --app-user)         need_value "$@"; APP_USER="$2";                       shift 2 ;;
          --cloudflare)       CLOUDFLARE=1;                                         shift   ;;
+         --tenant-db-prefix) need_value "$@"; TENANT_DB_PREFIX="$2";               shift 2 ;;
+         --serve-storage)    SERVE_STORAGE=1;                                      shift   ;;
+         --no-queue)         NO_QUEUE=1;                                           shift   ;;
+         --no-scheduler)     NO_SCHEDULER=1;                                       shift   ;;
          --db-name)          need_value "$@"; DB_NAME="$2";                        shift 2 ;;
          --db-user)          need_value "$@"; DB_USER="$2";                        shift 2 ;;
          --swap-size)        need_value "$@"; SWAP_SIZE="$2"; SWAP_SET=1;          shift 2 ;;
@@ -266,12 +284,16 @@ parse_args() {
   case "${DISABLE_ROOT_SSH,,}" in 1|true|yes) DISABLE_ROOT_SSH=1 ;; *) DISABLE_ROOT_SSH=0 ;; esac
   case "${NON_INTERACTIVE,,}" in 1|true|yes) NON_INTERACTIVE=1 ;; *) NON_INTERACTIVE=0 ;; esac
   case "${CLOUDFLARE,,}" in 1|true|yes) CLOUDFLARE=1 ;; *) CLOUDFLARE=0 ;; esac
+  case "${SERVE_STORAGE,,}" in 1|true|yes) SERVE_STORAGE=1 ;; *) SERVE_STORAGE=0 ;; esac
+  case "${NO_QUEUE,,}" in 1|true|yes) NO_QUEUE=1 ;; *) NO_QUEUE=0 ;; esac
+  case "${NO_SCHEDULER,,}" in 1|true|yes) NO_SCHEDULER=1 ;; *) NO_SCHEDULER=0 ;; esac
   return 0
 }
 
 # ── Validation ────────────────────────────────────────────────────────────────
 valid_php_ver()    { [[ "$1" =~ ^8\.[1-4]$ ]]; }
 valid_node_ver()   { [[ "$1" =~ ^(18|20|22|24)$ ]]; }
+valid_tenant_prefix() { [[ "$1" =~ ^[A-Za-z0-9_]{2,40}$ ]]; }
 valid_redis_conn() { [[ "$1" == "socket" || "$1" == "tcp" ]]; }
 valid_port_list() {
   local p
@@ -306,6 +328,7 @@ validate_inputs() {
   [[ -z "$DB_USER" ]]      || valid_db_user "$DB_USER"     || error "Invalid --db-user '$DB_USER' (letters, digits, underscore; max 32)"
   [[ -z "$REDIS_CONN" ]]   || valid_redis_conn "$REDIS_CONN" || error "Invalid --redis-conn '$REDIS_CONN' (socket | tcp)"
   [[ -z "$DB_USER" || -n "$DB_NAME" ]] || error "--db-user requires --db-name"
+  [[ -z "$TENANT_DB_PREFIX" ]] || valid_tenant_prefix "$TENANT_DB_PREFIX" || error "Invalid --tenant-db-prefix '$TENANT_DB_PREFIX' (letters, digits, underscore; 2-40 characters)"
   return 0
 }
 
@@ -647,6 +670,10 @@ check_consistency() {
     warn "phptune needs the lemp or lamp stack - it will be skipped."
     SERVICES[phptune]=0
   fi
+  if [[ -n "$TENANT_DB_PREFIX" && "$web" -eq 0 ]]; then
+    warn "--tenant-db-prefix only applies to web stacks with a database - ignored."
+    TENANT_DB_PREFIX=""
+  fi
   if [[ -n "$DB_NAME" && "$web" -eq 0 ]]; then
     warn "--db-name/--db-user only apply to lemp/lamp stacks - ignored."
     DB_NAME=""; DB_USER=""
@@ -680,6 +707,8 @@ confirm_install() {
     echo -e "  Admin host       : ${BOLD}${ADMIN_HOST:-admin.$DOMAIN}${RESET}"
     echo -e "  Storefront host  : ${BOLD}${SHOP_HOST:-$DOMAIN}${RESET}"
     echo -e "  Deploy user      : ${BOLD}${APP_USER}${RESET}   Cloudflare: ${BOLD}$(yes_no "$CLOUDFLARE")${RESET}"
+    echo -e "  Tenant DB prefix : ${BOLD}${TENANT_DB_PREFIX:-none}${RESET}   Serve /storage: ${BOLD}$(yes_no "$SERVE_STORAGE")${RESET}"
+    echo -e "  Queue worker     : ${BOLD}$(yes_no $((1 - NO_QUEUE)))${RESET}   Scheduler: ${BOLD}$(yes_no $((1 - NO_SCHEDULER)))${RESET}"
   fi
   echo -e "  Email            : ${BOLD}${EMAIL:-not set}${RESET}"
   echo -e "  Hostname         : ${BOLD}${HOSTNAME_VAL:-not set}${RESET}"

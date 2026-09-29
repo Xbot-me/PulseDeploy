@@ -37,6 +37,19 @@ command. Override host names with `--api-host`, `--admin-host`, `--shop-host`.
 | 4 GB       | 13              | 768 MB            | 245 MB| 256 / 384 MB             |
 | 8 GB       | 27              | 1 GB              | 491 MB| 384 / 512 MB             |
 
+## Options worth knowing
+
+| Option | Effect |
+|---|---|
+| `--tenant-db-prefix P` | for apps that create one database per tenant: the DB user may create and manage databases named `P*` (and only those) |
+| `--serve-storage` | nginx serves `/storage/*` on the Next.js hosts straight from the Laravel public disk |
+| `--no-queue` / `--no-scheduler` | skip the queue worker / scheduler timer when the app does not use them |
+| `--api-host`, `--admin-host`, `--shop-host` | override the default host names |
+
+The Next.js apps can call the API without leaving the machine at
+`http://127.0.0.1:8081` (loopback only; available as `INTERNAL_API_URL` in their
+`.env`). Walk-through for a real multi-tenant app: [aventech-crm.md](aventech-crm.md).
+
 ## After the install
 
 1. Point DNS A records for the three hosts (and `www`) at the server. With Cloudflare, keep the proxy on and use SSL mode *Full (strict)*.
