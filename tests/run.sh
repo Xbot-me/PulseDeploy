@@ -434,8 +434,38 @@ R=(bash "$ROOT/revert.sh")
 check     "--help works"                 "${R[@]}" --help
 check_not "unknown flag rejected"        "${R[@]}" --bogus
 
+echo "── audit helpers"
+audit() { ( source "$ROOT/scripts/audit.sh"; "$@" ); } # subshell: audit.sh keeps its own PASS/FAIL counters
+eq "percentile p50 of 1..10"          "5"   "$(audit percentile 50 10 1 9 2 8 3 7 4 6 5)"
+eq "percentile p95 of 1..20"          "19"  "$(audit percentile 95 $(seq 1 20))"
+eq "percentile p100 is the maximum"   "250" "$(audit percentile 100 12 250 40)"
+eq "percentile of one sample"         "7"   "$(audit percentile 95 7)"
+check_not "percentile of nothing fails" audit percentile 95
+printf 'API_HOST=api.example.com\nKEEP_RELEASES=5\n# X=1\n' >"$TMP/pulse.conf"
+eq "conf_val reads a key"             "api.example.com" "$(audit conf_val "$TMP/pulse.conf" API_HOST)"
+eq "conf_val ignores comments"        ""    "$(audit conf_val "$TMP/pulse.conf" X)"
+check_not "conf_val on a missing file fails" audit conf_val "$TMP/none" API_HOST
+printf '; managed\npm = ondemand\npm.max_children = 12\npm.max_children = 14\nopcache.jit=tracing\n' >"$TMP/pool.conf"
+eq "ini_val trims spaces"             "ondemand" "$(audit ini_val "$TMP/pool.conf" pm)"
+eq "ini_val takes the last assignment" "14"  "$(audit ini_val "$TMP/pool.conf" pm.max_children)"
+eq "ini_val without spaces"           "tracing" "$(audit ini_val "$TMP/pool.conf" opcache.jit)"
+ss_sample='LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=1,fd=6))
+LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=2,fd=3))
+LISTEN 0 80 127.0.0.1:3306 0.0.0.0:* users:(("mariadbd",pid=3,fd=20))
+LISTEN 0 511 127.0.0.1:8081 0.0.0.0:* users:(("nginx",pid=1,fd=8))
+LISTEN 0 511 [::]:80 [::]:* users:(("nginx",pid=1,fd=7))
+LISTEN 0 100 [::1]:25 [::]:*
+LISTEN 0 128 0.0.0.0:6379 0.0.0.0:* users:(("redis-server",pid=4,fd=6))'
+eq "public listeners skip loopback and dedupe" "22 sshd
+80 nginx
+6379 redis-server" "$(printf '%s\n' "$ss_sample" | audit public_listeners_from)"
+eq "perm_check accepts 640 against 640" "ok" "$(touch "$TMP/p640" && chmod 640 "$TMP/p640" && audit perm_check "$TMP/p640" 640 x | grep -q PASS && echo ok)"
+eq "perm_check rejects 644 against 640" "ok" "$(touch "$TMP/p644" && chmod 644 "$TMP/p644" && audit perm_check "$TMP/p644" 640 x | grep -q FAIL && echo ok)"
+check "audit --help works"               bash "$ROOT/scripts/audit.sh" --help
+check_not "audit rejects an unknown flag" bash "$ROOT/scripts/audit.sh" --bogus
+
 echo "── syntax"
-for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/*/*.sh; do
+for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"
 done
 

@@ -37,6 +37,7 @@ print_help() {
 ${BOLD}USAGE${RESET}
   sudo bash crm.sh install --domain <domain> --storefront <id|git-url|none> [options]
   sudo pulse-crm update  [--only backend,admin,storefront] [--crm-ref REF] [--storefront-ref REF]
+  sudo pulse-crm audit [--load]    read-only check of the live server against its tuning targets
   bash crm.sh storefronts          list the storefronts you can choose from
   bash crm.sh help
 
@@ -598,6 +599,8 @@ cmd_update() {
 }
 
 main() {
+  # audit has its own options (--load, --no-perf), so it bypasses the install parser
+  if [[ "${1:-}" == "audit" ]]; then shift; exec bash "$ROOT/scripts/audit.sh" "$@"; fi
   parse_args "$@"
   case "$CMD" in
     install)      cmd_install ;;
@@ -606,7 +609,7 @@ main() {
     status)       exec pulse status ;;
     version|--version) echo "crm.sh v${CRM_VERSION}" ;;
     help|-h|--help) print_help ;;
-    *) error "Unknown command '$CMD' (install | update | storefronts | status | help)" ;;
+    *) error "Unknown command '$CMD' (install | update | storefronts | status | audit | help)" ;;
   esac
 }
 
