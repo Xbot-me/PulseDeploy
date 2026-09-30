@@ -30,6 +30,12 @@ install_mysql() {
     amzn)             candidates=(mariadb1011-server mariadb105-server mariadb-server mysql-server) ;;
     *)                candidates=(mysql-server mariadb-server) ;;
   esac
+  # Versioned MariaDB packages conflict with each other: keep one that is already installed.
+  if [[ "$OS_ID" == "amzn" ]]; then
+    local have=""
+    have="$(rpm -qa --qf '%{NAME}\n' 'mariadb*-server' 2>/dev/null | head -n 1)" || have=""
+    if [[ -n "$have" ]]; then candidates=("$have"); fi
+  fi
   pkg_install_first "${candidates[@]}" ||
     error "Could not install a database server (tried: ${candidates[*]})."
   log "Installed database package: $PKG_INSTALLED"
