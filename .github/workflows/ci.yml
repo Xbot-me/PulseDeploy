@@ -20,7 +20,7 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Lint entry points
-        run: shellcheck -x bootstrap.sh revert.sh
+        run: shellcheck -x bootstrap.sh revert.sh crm.sh
 
       - name: Lint library, module and test scripts
         run: |
@@ -91,6 +91,9 @@ jobs:
             "scripts/lib/profile_tuning.sh"
             "scripts/stacks/laravel_next.sh"
             "bin/pulse"
+            "crm.sh"
+            "scripts/lib/crm.sh"
+            "apps/crm/aventech.conf"
             "config/laravel-next/nginx-api.conf"
             "config/laravel-next/nginx-next.conf"
             "config/laravel-next/nginx-http.conf"

@@ -1,5 +1,7 @@
 # Running AvenTech CRM on a laravel-next server
 
+> The one-command installer is [crm-installer.md](crm-installer.md); this page explains the parts.
+
 AvenTech CRM is a Laravel 11 API (`backend/`) with a Next.js admin panel
 (`admin-frontend/`). Stores are multi-tenant: each store gets its own MySQL
 database (`zymerce_tenant_<subdomain>`), chosen per request by the

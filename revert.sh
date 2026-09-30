@@ -389,6 +389,9 @@ revert_laravel_next() {
     /etc/logrotate.d/pulsedeploy /etc/sysctl.d/99-pulsedeploy-app.conf \
     /etc/systemd/journald.conf.d/pulsedeploy.conf
   run_or_echo rm -rf /etc/pulsedeploy /etc/nginx/pulsedeploy
+  # crm.sh leftovers: build workspace, the toolkit copy and its command, git helper
+  run_or_echo rm -rf /var/lib/pulsedeploy /opt/pulsedeploy
+  run_or_echo rm -f /usr/local/bin/pulse-crm /usr/local/lib/pulsedeploy-git-askpass
   for f in /etc/nginx/conf.d/00-pulsedeploy-http.conf /etc/nginx/conf.d/01-pulsedeploy-cloudflare.conf \
            /etc/nginx/conf.d/pulsedeploy-api.conf /etc/nginx/conf.d/pulsedeploy-shop.conf \
            /etc/nginx/conf.d/pulsedeploy-admin.conf /etc/nginx/conf.d/pulsedeploy-redirect.conf \
@@ -402,6 +405,7 @@ revert_laravel_next() {
   if [[ "$PURGE_DATA" -eq 1 ]]; then
     warn "--purge-data: deleting the applications, uploads and backups"
     run_or_echo rm -rf /var/www/api /var/www/admin /var/www/shop /var/backups/pulsedeploy
+    run_or_echo rm -f /root/pulsedeploy-crm-credentials.txt
   else
     info "Kept: /var/www/{api,admin,shop} (code, .env, uploads), /var/backups/pulsedeploy, the deploy user, automatic security updates"
   fi

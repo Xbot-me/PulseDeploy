@@ -88,6 +88,8 @@ Everything the wizard asks can also be given as a flag (`--stack`, `--php`, `--n
 
 **Laravel API + two Next.js apps on one cheap VPS:** `sudo bash bootstrap.sh --stack laravel-next --domain example.com`. It tunes PHP-FPM, MySQL, Redis and Node for a shared 2-8 GB box, sets up systemd services, a queue worker, backups and a `pulse deploy` / `pulse rollback` command. Full guide and CI examples: [docs/laravel-next.md](docs/laravel-next.md); a worked multi-tenant example is in [docs/aventech-crm.md](docs/aventech-crm.md).
 
+**Everything in one command** (pull, build, install and configure the CRM with a chosen storefront): `sudo bash crm.sh install --domain example.com --storefront <id|git-url|none> ...`, see [docs/crm-installer.md](docs/crm-installer.md).
+
 To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh --yes` (dry-run without `--yes`; databases and Docker data are kept unless `--purge-data`).
 
 ---
@@ -98,6 +100,8 @@ To undo an installation: `sudo bash revert.sh --list`, then `sudo bash revert.sh
 PulseDeploy/
 ├── bootstrap.sh              # Main entry point & interactive wizard
 ├── revert.sh                 # Roll back what bootstrap.sh installed (dry-run by default)
+├── crm.sh                    # One command: pull, build, install and configure a CRM + storefront
+├── apps/                     # CRM and storefront definitions (crm/, storefronts/)
 ├── bin/pulse                 # On-server CLI: deploy, rollback, status, logs, backup (laravel-next)
 ├── docs/laravel-next.md      # Laravel + Next.js stack guide
 ├── examples/github-actions/  # CI workflows that build and deploy the apps
