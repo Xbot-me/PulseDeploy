@@ -4,13 +4,23 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 
 # _redis_ping <socket|tcp> <socket-path> - retries for ~10 s
+# The client is named after the package on Amazon Linux (redis6-cli, redis7-cli).
+_redis_cli_bin() {
+  local b
+  for b in redis-cli redis6-cli redis7-cli; do
+    if command -v "$b" &>/dev/null; then printf '%s' "$b"; return 0; fi
+  done
+  return 1
+}
+
 _redis_ping() {
-  local mode="$1" sock="$2" i reply=""
+  local mode="$1" sock="$2" i reply="" cli=""
+  cli="$(_redis_cli_bin)" || error "No redis client (redis-cli) found to verify the server."
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if [[ "$mode" == "socket" ]]; then
-      reply="$(redis-cli -s "$sock" ping 2>/dev/null || true)"
+      reply="$("$cli" -s "$sock" ping 2>/dev/null || true)"
     else
-      reply="$(redis-cli ping 2>/dev/null || true)"
+      reply="$("$cli" ping 2>/dev/null || true)"
     fi
     [[ "$reply" == "PONG" ]] && return 0
     sleep 1
