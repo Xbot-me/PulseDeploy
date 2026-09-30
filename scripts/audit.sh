@@ -320,7 +320,8 @@ audit_response() {
     asset="$(find "$APPS_ROOT/admin/current/.next/static" -type f -name '*.js' 2>/dev/null | head -n 1)" || asset=""
     if [[ -n "$asset" ]]; then
       local url="/_next/static/${asset#*/.next/static/}" cc
-      cc="$(curl -s -o /dev/null -D - -m 10 -H "Host: $ADMIN_HOST" "http://127.0.0.1$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "cache-control:" { print; exit }')"
+      # nginx sends one Cache-Control line from "expires" and one from add_header: read them all
+      cc="$(curl -s -o /dev/null -D - -m 10 -H "Host: $ADMIN_HOST" "http://127.0.0.1$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "cache-control:" { printf "%s ", $0 }')"
       [[ "$cc" == *immutable* ]] && pass "static assets: ${cc}" || warnc "static assets are not served as immutable (${cc:-no Cache-Control header})"
     fi
   fi
@@ -357,7 +358,7 @@ audit_security() {
     if [[ "$port" == "80" || "$port" == "443" || "$port" == "$sshp" ]]; then
       note "public listener: ${port} (${proc:-?})"
     else
-      extra=1; fail "port ${port} (${proc:-?}) is reachable from outside: only ${sshp}, 80 and 443 should be"
+      extra=1; fail "port ${port} (${proc:-?}) listens on all interfaces: only ${sshp}, 80 and 443 should (the firewall may still block it, but the service itself must be bound to 127.0.0.1)"
     fi
   done <<<"$lines"
   [[ "$extra" -eq 0 ]] && pass "only SSH, HTTP and HTTPS listen on public addresses"
