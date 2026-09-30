@@ -435,7 +435,7 @@ check     "--help works"                 "${R[@]}" --help
 check_not "unknown flag rejected"        "${R[@]}" --bogus
 
 echo "── syntax"
-for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/scripts/*/*.sh; do
+for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"
 done
 

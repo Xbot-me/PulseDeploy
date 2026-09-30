@@ -82,6 +82,11 @@ _firewall_firewalld() {
 _setup_fail2ban() {
   local ssh_port_csv="${1// /,}"
   info "Installing fail2ban..."
+  # Not every distribution packages fail2ban (Amazon Linux 2023 does not).
+  if ! pkg_installed fail2ban && ! pkg_available fail2ban; then
+    warn "fail2ban is not available from this distribution's repositories - skipping it. The firewall is still active."
+    return 0
+  fi
   pkg_install_required fail2ban
   if [[ "$PKG_MANAGER" == "apt" ]]; then
     pkg_install_optional python3-systemd

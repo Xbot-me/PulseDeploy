@@ -11,10 +11,12 @@ os_update() {
 }
 
 os_install_base() {
-  local pkgs=(wget git unzip zip ca-certificates gnupg2 net-tools logrotate cronie tar gzip)
+  local pkgs=(wget git unzip zip ca-certificates net-tools logrotate cronie tar gzip)
   # AL2023 ships curl-minimal, which conflicts with the full curl package.
   command -v curl &>/dev/null || pkgs+=(curl)
   retry 3 5 pm_rpm install -y -q "${pkgs[@]}"
+  # AL2023 ships gnupg2-minimal (provides gpg); the full package would conflict with it.
+  command -v gpg &>/dev/null || pkg_install_optional gnupg2
   pkg_install_optional htop
   systemctl enable --now crond || warn "Could not start crond - cron jobs will not run."
   log "Base dependencies installed"
