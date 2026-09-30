@@ -3,8 +3,9 @@
 ```bash
 sudo pulse-crm audit            # on a server installed with crm.sh
 sudo bash scripts/audit.sh      # from a checkout of this repository
-sudo bash scripts/audit.sh --load      # plus a 200-request burst against the API
+sudo bash scripts/audit.sh --load      # plus a burst against the API (memory, CPU, latency)
 sudo bash scripts/audit.sh --no-perf   # skip the response-time section
+sudo pulse-crm retune                  # apply hand-tuned values (see "Fine-tuning from measurements")
 ```
 
 The audit is **read-only**. Each line is `PASS`, `WARN`, `FAIL`, `INFO` or `SKIP`, with
@@ -54,7 +55,8 @@ the change was never applied. It is not automatically wrong.
 | Response time (API `/up`, admin `/login`) | 20 requests after a warm-up, time to first byte, p50 / p95 / max | p95 <= 300 ms (guideline) |
 | Compression, static asset caching | `Accept-Encoding: gzip`; `Cache-Control` on a hashed asset | gzip, `immutable` |
 | Laravel release | files in `current/` | config and routes cached, no dev dependencies, optimised autoloader, `APP_DEBUG=false`, Redis cache and sessions, OPcache big enough for the file count |
-| Load burst (`--load`) | 200 requests, 10 at a time, on the loopback | no failed request, memory still >= 10% free, req/s and p95 printed |
+| Load burst (`--load`) | configurable requests and concurrency on the loopback; endpoint and auth via `--load-path`, `--headers-file` | no 5xx, memory still >= 10% free; prints req/s, p50/p95/p99, CPU busy / disk wait / steal, and the measured PHP worker size |
+| Kernel and limits | sysctl, `/sys`, systemd, Redis log | transparent hugepages `madvise`/`never`, `vm.overcommit_memory=1`, `somaxconn` >= 1024, no Redis warnings |
 
 The response times are measured **from the server itself**, so they show what the
 application and nginx cost, without the network. Because PHP-FPM runs `ondemand`, the
@@ -71,6 +73,99 @@ reports the warm figure.
   <= 600, the sudoers file validates, nothing world-writable under `/var/www`.
 * Nightly backup job installed and the newest backup younger than 36 hours; disk and
   inode use under 80%.
+
+## Fine-tuning from measurements
+
+Settings tuned on guesses are wrong half the time, so tune in this loop: **measure a
+realistic load, change one thing, measure again**.
+
+### 1. A realistic load (the health check is not one)
+
+`/up` only proves PHP answers. Use real endpoints with a real login. This writes the
+request headers to a root-only file (the password and token never appear in a command
+line or in `ps`):
+
+```bash
+sudo bash -c '
+API=$(awk -F= "/^API_HOST=/ {print \$2}" /etc/pulsedeploy/pulse.conf)
+STORE=$(awk -F= "/^STORE=/ {print \$2}" /etc/pulsedeploy/crm.conf)
+EMAIL=$(awk "/^email:/ {print \$2}" /root/pulsedeploy-crm-credentials.txt)
+PASS=$(awk "/^password:/ {print \$2}" /root/pulsedeploy-crm-credentials.txt)
+TOKEN=$(curl -s -H "Host: $API" -H "X-Store-Subdomain: $STORE" -H "Content-Type: application/json" \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" http://127.0.0.1/api/v1/admin/login \
+  | sed -n "s/.*\"token\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")
+install -m 600 /dev/null /root/load-headers
+printf "X-Store-Subdomain: %s\nAuthorization: Bearer %s\n" "$STORE" "$TOKEN" >/root/load-headers
+echo "token length: ${#TOKEN}"'
+```
+
+The token length should be about 40. Then hit endpoints that cost something (authentication
+and tenant resolution, a list query):
+
+```bash
+sudo bash scripts/audit.sh --no-perf --load --load-path /api/v1/admin/me     --headers-file /root/load-headers
+sudo bash scripts/audit.sh --no-perf --load --load-path /api/v1/admin/orders --headers-file /root/load-headers \
+     --requests 500 --concurrency 20
+```
+
+If the burst reports refused (4xx) responses the numbers measure error pages, not your app.
+Add data first (import or create realistic rows): an empty database is always fast.
+
+### 2. What the burst tells you
+
+| Line | Meaning | Action |
+|---|---|---|
+| `PHP workers ... about N MB each` | **measured** memory of one worker (PSS, shared OPcache split fairly); the default sizing assumes 60 MB | use N when sizing `FPM_CHILDREN` |
+| `memory left for PHP ... up to K workers` | RAM minus database, Redis, both Node limits and the OS, divided by N | `FPM_CHILDREN` up to K |
+| `every PHP worker was busy at once` | requests queued behind `pm.max_children` | raise it if memory allows; otherwise make the endpoint faster |
+| `CPU ... steal > 5%` | the host is oversubscribed or out of CPU credits | no setting helps: change instance type |
+| `disk wait > 10%` | storage is the bottleneck (slow volume, database reading from disk) | faster volume, bigger buffer pool, or an index |
+| `CPU saturated` | more workers cannot help | faster code, caching, or more CPU |
+| p95 much larger than p50 | queueing or cold `ondemand` workers | raise the workers, or use `pm = dynamic` with spare servers if cold starts matter |
+
+### 3. Keep a tuned value: `/etc/pulsedeploy/tuning.conf`
+
+```
+# only these keys are read; values must be positive whole numbers
+FPM_CHILDREN=16
+MYSQL_BUFFER_POOL_MB=1024
+MYSQL_MAX_CONNECTIONS=80
+REDIS_MAXMEM_MB=300
+NODE_HEAP_ADMIN=320
+NODE_HEAP_SHOP=384
+```
+
+Anything not listed keeps the RAM-based value. The installer reads this file on every run
+(so a re-run no longer resets your numbers) and `audit.sh` treats these values as the target.
+Apply them to the running server without re-provisioning:
+
+```bash
+sudo pulse-crm retune                 # shows what would change, changes nothing
+sudo pulse-crm retune --apply         # applies it
+sudo pulse-crm retune --apply --worker-mb 38     # check the memory plan with your measured worker size
+```
+
+`retune` changes only these numbers: PHP-FPM is config-tested then reloaded (no dropped
+requests), the database pool and Redis limit are changed live with no restart, and each
+Node app restarts for about a second. A plan that does not fit in RAM is refused unless
+`--force` is given. Afterwards run `audit.sh` again and compare.
+
+### 4. Where the real gains usually are
+
+Server settings rarely matter as much as these, so check them before tuning further:
+
+1. **Slow queries and missing indexes.** `mysqldumpslow` on the slow log, then `EXPLAIN` the
+   worst ones; an index turns a 500 ms query into 1 ms. `Innodb_buffer_pool_reads` growing
+   means the data does not fit the pool.
+2. **N+1 queries and uncached lists in the application** (eager-load relations, cache
+   expensive queries in Redis). The audit cannot see these; Laravel Telescope or Debugbar
+   on a staging copy can.
+3. **Persistent workers.** Laravel Octane (FrankenPHP or Swoole) removes the framework boot on
+   every request and often multiplies throughput, at the cost of keeping workers in RAM and
+   requiring code that is safe to keep in memory. Worth trying only after the two points above.
+4. **A CDN in front** for images and build assets (`--cloudflare` is supported).
+5. **More RAM or CPU.** If the burst shows saturated CPU or no memory left for workers, no
+   setting will change that.
 
 ## What this cannot tell you
 

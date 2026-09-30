@@ -51,10 +51,13 @@ lnx_defaults() {
   DB_NAME="${DB_NAME:-app}"
   DB_USER="${DB_USER:-app}"
   LNX_RAM_MB="$(total_ram_mb)"
+  tune_load_overrides "$LNX_ETC/tuning.conf"
   if ((LNX_RAM_MB < 1800)); then
     warn "Only ${LNX_RAM_MB}MB RAM: 2GB is the practical minimum for MySQL + PHP + two Node apps. Expect swapping."
   fi
   info "$(tune_summary "$LNX_RAM_MB")"
+  local ov; ov="$(tune_active_overrides | tr '\n' ' ')"
+  [[ -z "$ov" ]] || info "Hand-tuned overrides from $LNX_ETC/tuning.conf: $ov"
 }
 
 # Highest PHP version the distribution ships itself (avoids third-party repos).
