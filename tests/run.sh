@@ -171,6 +171,7 @@ echo "── laravel-next templates"
   sed -i -e 's/^#storage# //' "$out"; grep -q 'alias /var/www/api/shared/storage/app/public/;' "$out" || exit 12
   lnx_render "$ROOT/config/laravel-next/mysql-tuning.cnf" "$out" MAXCONN=50 BP=384 TMP=32 TABLE_CACHE=2000 TABLE_DEF=2000 "BINLOG="
   grep -q 'table_open_cache *= 2000' "$out" || exit 13
+  grep -q '^bind-address *= 127.0.0.1$' "$out" || exit 15   # the database must never listen publicly
   lnx_render "$ROOT/config/laravel-next/nginx-api.conf" "$out" "HOST=api.example.com" "ROOT=/var/www/api/current/public" "PHP_SOCK=/run/php/x.sock" "LOCATIONS=/x.inc" "INTERNAL_PORT=8081"
   for p in /login /api/login /api/v1/admin/login /api/v1/forgot-password; do   # throttle must cover the real login paths
     printf '%s' "$p" | grep -Eq "$(sed -n 's/^ *location ~ \(.*\) {$/\1/p' "$out" | head -n 1)" || exit 14
