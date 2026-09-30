@@ -92,6 +92,17 @@ install_redis() {
   fi
   log "Redis is running and responding to PING ✔ (${conn})"
 
+  # Redis forks to write snapshots. With vm.overcommit_memory=0 the kernel can refuse that
+  # fork on a memory-tight server, and Redis then rejects writes (sessions live here).
+  # Setting it to 1 is Redis's own recommendation.
+  if [[ "$(sysctl -n vm.overcommit_memory 2>/dev/null)" != "1" ]]; then
+    printf '# Managed by PulseDeploy - lets Redis always fork to snapshot\nvm.overcommit_memory = 1\n' \
+      >/etc/sysctl.d/99-pulsedeploy-redis.conf
+    sysctl -p /etc/sysctl.d/99-pulsedeploy-redis.conf &>/dev/null ||
+      warn "Could not apply vm.overcommit_memory=1 now (it applies on reboot)."
+    log "vm.overcommit_memory=1 (Redis recommendation)"
+  fi
+
   # PHP-FPM must be restarted to pick up the new group membership.
   php_layout
   if [[ "$conn" == "socket" ]] && svc_exists "$PHP_FPM_SVC" && svc_active "$PHP_FPM_SVC"; then

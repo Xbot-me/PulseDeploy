@@ -25,7 +25,8 @@ APPS_ROOT="${APPS_ROOT:-/var/www}"
 SAMPLES="${AUDIT_SAMPLES:-20}"
 P95_LIMIT_MS="${AUDIT_P95_MS:-300}"
 PASS=0; WARN=0; FAIL=0; SKIP=0
-OPC_FILES=""
+OPC_FILES=""; POOL_CHILDREN=""
+LOAD_PATH="/up"; LOAD_REQUESTS=200; LOAD_CONC=10; LOAD_HEADERS_FILE=""
 
 pass()  { PASS=$((PASS + 1)); printf '  %s %s\n' "${GREEN}PASS${RESET}" "$*"; }
 warnc() { WARN=$((WARN + 1)); printf '  %s %s\n' "${YELLOW}WARN${RESET}" "$*"; }
@@ -74,6 +75,30 @@ public_listeners_from() {
 
 kb_to_mb() { echo $(($1 / 1024)); }
 
+# Percentages between two "cpu ..." lines of /proc/stat: "busy iowait steal".
+cpu_delta() { # cpu_delta "<line before>" "<line after>"
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    split(a, x, " "); split(b, y, " ")
+    for (i = 2; i <= 9; i++) dt += y[i] - x[i]
+    if (dt <= 0) { print "0.0 0.0 0.0"; exit }
+    idle = (y[5] - x[5]) + (y[6] - x[6])
+    printf "%.1f %.1f %.1f\n", (dt - idle) * 100 / dt, (y[6] - x[6]) * 100 / dt, (y[9] - x[9]) * 100 / dt
+  }'
+}
+
+# RAM left for PHP-FPM workers once everything else has its share (MB).
+# 300 = database memory beyond the buffer pool, 512 = OS, nginx and page cache.
+php_budget_mb() { # php_budget_mb <ram> <buffer pool> <redis max> <admin max> <shop max>
+  echo $(($1 - $2 - 300 - $3 - $4 - $5 - 512))
+}
+
+# Largest pm.max_children the budget allows at a measured worker size (never below 4).
+suggest_children() { # suggest_children <budget mb> <worker mb>
+  local n=$(($1 / ($2 > 0 ? $2 : 1)))
+  ((n < 4)) && n=4
+  echo "$n"
+}
+
 # ── gathering ─────────────────────────────────────────────────────────────────
 mysql_q() { mysql -NBe "$1" 2>/dev/null; }
 redis_bin() { local b; for b in redis-cli redis6-cli redis7-cli; do have "$b" && { echo "$b"; return 0; }; done; return 1; }
@@ -97,7 +122,10 @@ audit_overview() {
   head_ "Server"
   RAM="$(mem_total_mb)"
   note "$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown OS}"), $(nproc) CPU, ${RAM} MB RAM, kernel $(uname -r)"
+  tune_load_overrides "$LNX_ETC/tuning.conf"
   note "$(tune_summary "$RAM")"
+  local ov; ov="$(tune_active_overrides | tr '\n' ' ')"
+  [[ -z "$ov" ]] || note "hand-tuned overrides in use ($LNX_ETC/tuning.conf), treated as the target: $ov"
   if [[ -r "$LNX_ETC/pulse.conf" ]]; then
     API_HOST="$(conf_val "$LNX_ETC/pulse.conf" API_HOST)"
     ADMIN_HOST="$(conf_val "$LNX_ETC/pulse.conf" ADMIN_HOST)"
@@ -114,7 +142,8 @@ audit_php() {
   local pool ini v
   if pool="$(first_file /etc/php-fpm.d/pulse-laravel.conf /etc/php/*/fpm/pool.d/pulse-laravel.conf)"; then
     v="$(ini_val "$pool" pm)";               [[ "$v" == "ondemand" ]] && pass "pool mode: ondemand (idle RAM stays near zero)" || warnc "pool mode: ${v:-unset}, expected ondemand"
-    drift "pm.max_children" "$(ini_val "$pool" pm.max_children)" "$(tune_fpm_children "$RAM")"
+    POOL_CHILDREN="$(ini_val "$pool" pm.max_children)"
+    drift "pm.max_children" "$POOL_CHILDREN" "$(tune_fpm_children "$RAM")"
     v="$(ini_val "$pool" pm.max_requests)";  [[ -n "$v" && "$v" -gt 0 ]] 2>/dev/null && pass "pm.max_requests=$v (workers recycle, leaks cannot accumulate)" || warnc "pm.max_requests unset: workers never recycle"
   else
     skip "PulseDeploy PHP-FPM pool file not found"
@@ -327,24 +356,112 @@ audit_response() {
   fi
 }
 
+# Sampler: one line per sample, "workers max_pss_kb sum_pss_kb" for the Laravel pool.
+# PSS (proportional set size) splits shared memory such as OPcache between workers,
+# so it is the real cost of one more worker; plain RSS would count it every time.
+php_pss_sample() {
+  local pid n=0 max=0 sum=0 p
+  for pid in $(pgrep -f 'php-fpm: pool pulse-laravel' 2>/dev/null); do
+    p="$(awk '/^Pss:/ { print $2; exit }' "/proc/$pid/smaps_rollup" 2>/dev/null)" || continue
+    [[ "$p" =~ ^[0-9]+$ ]] || continue
+    n=$((n + 1)); sum=$((sum + p)); ((p > max)) && max=$p
+  done
+  echo "$n $max $sum"
+}
+
 audit_load() {
-  head_ "Load burst (200 requests, 10 at a time, API /up on this machine)"
+  head_ "Load burst (${LOAD_REQUESTS} requests, ${LOAD_CONC} at a time, ${LOAD_PATH} on this machine)"
   [[ -n "$API_HOST" ]] || { skip "no API host"; return; }
-  local before after out total bad p95 secs start end
+  local tmp out samples hdr=() before after total secs start end w i per
+  local c2 c3 c4 c5 c0 p50 p95 p99 cpu1 cpu2 cpu
+  local -a pids=()
+  [[ -z "$LOAD_HEADERS_FILE" ]] || hdr=(-H "@${LOAD_HEADERS_FILE}")
+  tmp="$(mktemp -d)"; out="$tmp/out"; samples="$tmp/samples"; : >"$out"
+  per=$((LOAD_REQUESTS / LOAD_CONC))
   before="$(mem_avail_mb)"
+  cpu1="$(head -n 1 /proc/stat)"
+  ( while :; do php_pss_sample; sleep 0.2; done ) >"$samples" 2>/dev/null &
+  local sampler=$!
   start="$(date +%s.%N)"
-  out="$(seq 200 | xargs -P 10 -I{} curl -s -o /dev/null -m 30 -w '%{http_code} %{time_total}\n' \
-    -H "Host: $API_HOST" "http://127.0.0.1/up" 2>/dev/null)"
+  for ((w = 0; w < LOAD_CONC; w++)); do
+    ( for ((i = 0; i < per; i++)); do
+        curl -s -o /dev/null -m 30 -w '%{http_code} %{time_total}\n' -H "Host: $API_HOST" "${hdr[@]}" "http://127.0.0.1${LOAD_PATH}" 2>/dev/null || echo "000 0"
+      done ) >>"$out" &
+    pids+=($!)
+  done
+  wait "${pids[@]}"
   end="$(date +%s.%N)"
+  cpu2="$(head -n 1 /proc/stat)"
+  kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
   after="$(mem_avail_mb)"
-  total="$(wc -l <<<"$out")"
-  bad="$(awk '$1 !~ /^[23]/ { n++ } END { print n + 0 }' <<<"$out")"
-  p95="$(awk '{ printf "%d\n", $2 * 1000 }' <<<"$out" | sort -n | awk '{ a[NR] = $1 } END { i = int((95 * NR + 99) / 100); print a[i] }')"
+  total="$(wc -l <"$out")"
+  [[ "$total" -gt 0 ]] || { fail "the burst produced no results"; rm -rf "$tmp"; return; }
+  c2="$(awk '$1 ~ /^2/' "$out" | wc -l)"; c3="$(awk '$1 ~ /^3/' "$out" | wc -l)"
+  c4="$(awk '$1 ~ /^4/' "$out" | wc -l)"; c5="$(awk '$1 ~ /^5/' "$out" | wc -l)"
+  c0=$((total - c2 - c3 - c4 - c5))
+  mapfile -t ms < <(awk '{ printf "%d\n", $2 * 1000 + 0.5 }' "$out")
+  p50="$(percentile 50 "${ms[@]}")"; p95="$(percentile 95 "${ms[@]}")"; p99="$(percentile 99 "${ms[@]}")"
   secs="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')"
-  note "$(awk -v n="$total" -v s="$secs" 'BEGIN { printf "%d requests in %s s = %.0f req/s", n, s, n / s }'), p95 ${p95} ms"
-  [[ "$bad" -eq 0 ]] && pass "no failed requests (all 2xx/3xx)" || fail "${bad} of ${total} requests failed"
+  note "$(awk -v n="$total" -v s="$secs" 'BEGIN { printf "%d requests in %s s = %.0f req/s", n, s, n / s }'); latency p50 ${p50} ms, p95 ${p95} ms, p99 ${p99} ms"
+  note "responses: ${c2} x 2xx, ${c3} x 3xx, ${c4} x 4xx, ${c5} x 5xx, ${c0} x no answer"
+  if [[ $((c5 + c0)) -gt 0 ]]; then fail "$((c5 + c0)) of ${total} requests failed (5xx or no answer)"; else pass "no server errors under load"; fi
+  if [[ "$c4" -gt 0 ]]; then warnc "${c4} requests were refused (4xx): the numbers above measure error pages, not your app. Pass --headers-file with the token and tenant header"; fi
+
+  cpu="$(cpu_delta "$cpu1" "$cpu2")"
+  read -r cb ci cs <<<"$cpu"
+  note "CPU during the burst: ${cb}% busy, ${ci}% waiting on disk, ${cs}% stolen by the hypervisor"
+  awk -v v="$cs" 'BEGIN { exit !(v > 5) }' && warnc "CPU steal ${cs}% (> 5%): the host is oversubscribed or this instance is out of CPU credits, so no setting will fix the slowness"
+  awk -v v="$ci" 'BEGIN { exit !(v > 10) }' && warnc "disk wait ${ci}% (> 10%): storage is the bottleneck (slow volume, or the database is reading from disk)"
+  awk -v v="$cb" 'BEGIN { exit !(v > 90) }' && note "CPU was saturated: more PHP workers cannot raise throughput, only faster code or more CPU can"
+
+  local peak_n peak_max peak_sum wmb budget sug
+  read -r peak_n peak_max peak_sum < <(awk '$1 > 0 && $3 > s { n = $1; m = $2; s = $3 } END { print n + 0, m + 0, s + 0 }' "$samples")
+  if [[ "${peak_n:-0}" -gt 0 ]]; then
+    wmb=$(((peak_sum / peak_n + 1023) / 1024))
+    note "PHP workers at the peak: ${peak_n} running (pool limit ${POOL_CHILDREN:-?}), about ${wmb} MB each (largest $(((peak_max + 1023) / 1024)) MB); the default sizing assumes 60 MB"
+    [[ -n "${POOL_CHILDREN:-}" && "$peak_n" -ge "$POOL_CHILDREN" ]] && warnc "every PHP worker was busy at once: requests queued behind pm.max_children=${POOL_CHILDREN}. Raise it if memory allows (below), or make the endpoint faster"
+    budget="$(php_budget_mb "$RAM" "$(tune_mysql_buffer_pool "$RAM")" "$(tune_redis_mem "$RAM")" "$(tune_node_memory_max "$RAM" admin)" "$(tune_node_memory_max "$RAM" shop)")"
+    if [[ "$budget" -gt 0 ]]; then
+      sug="$(suggest_children "$budget" "$wmb")"
+      note "memory left for PHP after the database, Redis, both Node apps and the OS: about ${budget} MB -> up to ${sug} workers at ${wmb} MB (pool limit now ${POOL_CHILDREN:-?})"
+    else
+      warnc "no memory is left for PHP workers after the other services (${budget} MB): this machine is too small for the sizing in use"
+    fi
+  else
+    note "PHP worker memory: no samples (the PHP-FPM pool is not running, or this is not root)"
+  fi
   note "available memory: ${before} MB before, ${after} MB after"
   [[ "$after" -ge $((RAM * 10 / 100)) ]] && pass "memory held up under load" || fail "available memory fell to ${after} MB under load"
+  rm -rf "$tmp"
+}
+
+audit_kernel() {
+  head_ "Kernel and limits"
+  local v
+  if [[ -r /sys/kernel/mm/transparent_hugepage/enabled ]]; then
+    v="$(sed -n 's/.*\[\(.*\)\].*/\1/p' /sys/kernel/mm/transparent_hugepage/enabled)"
+    case "$v" in
+      never | madvise) pass "transparent hugepages: $v (no latency spikes for Redis and the database)" ;;
+      always) warnc "transparent hugepages: always. Redis and databases can stall; use madvise or never" ;;
+      *) note "transparent hugepages: ${v:-unknown}" ;;
+    esac
+  fi
+  v="$(sysctl -n vm.overcommit_memory 2>/dev/null)"
+  if [[ "$v" == "1" ]]; then pass "vm.overcommit_memory=1"
+  elif have redis-server || have redis6-server; then warnc "vm.overcommit_memory=${v:-?}: Redis snapshots can fail to fork under memory pressure (set vm.overcommit_memory=1)"
+  fi
+  v="$(sysctl -n net.core.somaxconn 2>/dev/null)"
+  [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1024 ]] && pass "net.core.somaxconn=$v (listen backlog)" || warnc "net.core.somaxconn=${v:-?}: bursts of connections can be dropped (want >= 1024)"
+  v="$(systemctl show -p LimitNOFILE --value nginx 2>/dev/null)"
+  [[ "$v" =~ ^[0-9]+$ && "$v" -ge 8192 ]] && pass "nginx open-file limit $v" || { [[ -n "$v" ]] && warnc "nginx open-file limit ${v}: low for many connections"; }
+  if redis_bin >/dev/null && have journalctl; then
+    v="$(journalctl -u redis6 -u redis -u redis-server --no-pager -q 2>/dev/null | grep -ci 'warning' || true)"
+    [[ "${v:-0}" -eq 0 ]] && pass "no warnings in the Redis log" || warnc "${v} warning lines in the Redis log: journalctl -u redis6 | grep -i warning"
+  fi
+  local s1 s2 cs
+  s1="$(head -n 1 /proc/stat)"; sleep 1; s2="$(head -n 1 /proc/stat)"
+  cs="$(cpu_delta "$s1" "$s2")"; read -r cb ci cs <<<"$cs"
+  note "CPU right now: ${cb}% busy, ${ci}% disk wait, ${cs}% steal"
 }
 
 audit_security() {
@@ -415,8 +532,15 @@ audit_ops() {
 usage() {
   cat <<'EOF'
 Usage: sudo bash scripts/audit.sh [--load] [--no-perf]
-  --load      also run a 200-request burst against the API (loopback, read-only)
-  --no-perf   skip the response-time section
+  --load                also run a load burst against the API (loopback only) and measure
+                        PHP worker memory, CPU, disk wait and latency
+  --load-path PATH      endpoint to hammer (default /up); use a real one, for example
+                        /api/v1/admin/products, together with --headers-file
+  --headers-file FILE   request headers, one "Name: value" per line (for example the
+                        bearer token and X-Store-Subdomain); kept out of the process list
+  --requests N          total requests (default 200)
+  --concurrency N       parallel clients (default 10; requests are split evenly)
+  --no-perf             skip the response-time section
 Environment: AUDIT_SAMPLES (default 20), AUDIT_P95_MS (default 300)
 EOF
 }
@@ -427,11 +551,19 @@ main() {
     case "$1" in
       --load) load=1 ;;
       --no-perf) perf=0 ;;
+      --load-path) LOAD_PATH="${2:-}"; shift ;;
+      --headers-file) LOAD_HEADERS_FILE="${2:-}"; shift ;;
+      --requests) LOAD_REQUESTS="${2:-}"; shift ;;
+      --concurrency) LOAD_CONC="${2:-}"; shift ;;
       -h | --help) usage; return 0 ;;
       *) echo "Unknown option: $1" >&2; usage >&2; return 2 ;;
     esac
     shift
   done
+  [[ "$LOAD_REQUESTS" =~ ^[0-9]+$ && "$LOAD_CONC" =~ ^[0-9]+$ && "$LOAD_CONC" -ge 1 && "$LOAD_REQUESTS" -ge "$LOAD_CONC" ]] ||
+    { echo "--requests and --concurrency must be numbers, requests >= concurrency" >&2; return 2; }
+  [[ "$LOAD_PATH" == /* ]] || { echo "--load-path must start with /" >&2; return 2; }
+  [[ -z "$LOAD_HEADERS_FILE" || -r "$LOAD_HEADERS_FILE" ]] || { echo "cannot read --headers-file $LOAD_HEADERS_FILE" >&2; return 2; }
   [[ "$(id -u)" -eq 0 ]] || echo "Note: run as root for complete results (database, sockets, sshd, sudoers)."
   audit_overview
   audit_php
@@ -440,6 +572,7 @@ main() {
   audit_node
   audit_nginx
   audit_memory
+  audit_kernel
   audit_laravel
   [[ "$perf" -eq 1 ]] && audit_response
   [[ "$load" -eq 1 ]] && audit_load

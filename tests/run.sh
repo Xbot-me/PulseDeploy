@@ -436,7 +436,7 @@ check     "--help works"                 "${R[@]}" --help
 check_not "unknown flag rejected"        "${R[@]}" --bogus
 
 echo "── audit helpers"
-audit() { ( source "$ROOT/scripts/audit.sh"; "$@" ); } # subshell: audit.sh keeps its own PASS/FAIL counters
+audit() { bash -c 'source "$1"; shift; "$@"' _ "$ROOT/scripts/audit.sh" "$@"; } # own shell: audit.sh keeps its own PASS/FAIL counters
 eq "percentile p50 of 1..10"          "5"   "$(audit percentile 50 10 1 9 2 8 3 7 4 6 5)"
 eq "percentile p95 of 1..20"          "19"  "$(audit percentile 95 $(seq 1 20))"
 eq "percentile p100 is the maximum"   "250" "$(audit percentile 100 12 250 40)"
@@ -462,11 +462,47 @@ eq "public listeners skip loopback and dedupe" "22 sshd
 6379 redis-server" "$(printf '%s\n' "$ss_sample" | audit public_listeners_from)"
 eq "perm_check accepts 640 against 640" "ok" "$(touch "$TMP/p640" && chmod 640 "$TMP/p640" && audit perm_check "$TMP/p640" 640 x | grep -q PASS && echo ok)"
 eq "perm_check rejects 644 against 640" "ok" "$(touch "$TMP/p644" && chmod 644 "$TMP/p644" && audit perm_check "$TMP/p644" 640 x | grep -q FAIL && echo ok)"
+eq "cpu_delta busy/iowait/steal"       "55.0 5.0 5.0" "$(audit cpu_delta 'cpu 0 0 0 0 0 0 0 0 0 0' 'cpu 400 0 100 400 50 0 0 50 0 0')"  # 1000 ticks: 450 idle+wait, 50 wait, 50 steal
+eq "cpu_delta with no elapsed time"    "0.0 0.0 0.0"   "$(audit cpu_delta 'cpu 1 0 1 1 1 0 0 1' 'cpu 1 0 1 1 1 0 0 1')"
+eq "php_budget_mb for a 4 GB server"   "1180" "$(audit php_budget_mb 3889 768 233 448 448)"
+eq "suggest_children divides the budget" "19" "$(audit suggest_children 1180 60)"
+eq "suggest_children never below 4"    "4"   "$(audit suggest_children 100 80)"
+eq "suggest_children survives 0 MB"    "100" "$(audit suggest_children 100 0)"
+check_not "audit rejects requests < concurrency" bash "$ROOT/scripts/audit.sh" --requests 3 --concurrency 10
+check_not "audit rejects a relative load path"   bash "$ROOT/scripts/audit.sh" --load-path up
 check "audit --help works"               bash "$ROOT/scripts/audit.sh" --help
 check_not "audit rejects an unknown flag" bash "$ROOT/scripts/audit.sh" --bogus
 
+echo "── tuning overrides"
+tune() { bash -c 'source "$1"; shift; "$@"' _ "$ROOT/scripts/lib/profile_tuning.sh" "$@"; }
+eq "no overrides: fpm children unchanged"  "12"  "$(tune tune_fpm_children 3889)"
+printf 'FPM_CHILDREN=20\nMYSQL_BUFFER_POOL_MB=1024\nREDIS_MAXMEM_MB=300\nNODE_HEAP_ADMIN=320\nNODE_HEAP_SHOP=abc\nEVIL=1; rm -rf /\nMYSQL_MAX_CONNECTIONS=0\n' >"$TMP/tuning.conf"
+ov() { bash -c 'source "$1"; tune_load_overrides "$2"; shift 2; "$@"' _ "$ROOT/scripts/lib/profile_tuning.sh" "$TMP/tuning.conf" "$@"; }
+eq "override: fpm children"               "20"   "$(ov tune_fpm_children 3889)"
+eq "override: buffer pool"                "1024" "$(ov tune_mysql_buffer_pool 3889)"
+eq "override: redis memory"               "300"  "$(ov tune_redis_mem 3889)"
+eq "override: node heap admin"            "320"  "$(ov tune_node_heap 3889 admin)"
+eq "override: MemoryMax follows the heap" "512"  "$(ov tune_node_memory_max 3889 admin)"
+eq "non-numeric override ignored"         "256"  "$(ov tune_node_heap 3889 shop)"
+eq "zero override ignored"                "50"   "$(ov tune_mysql_max_connections 3889)"
+eq "active overrides are listed"          "FPM_CHILDREN=20
+MYSQL_BUFFER_POOL_MB=1024
+REDIS_MAXMEM_MB=300
+NODE_HEAP_ADMIN=320" "$(ov tune_active_overrides)"
+eq "unknown keys are never executed"      "no" "$([[ -e '/rm' ]] && echo yes || echo no)"
+# shellcheck disable=SC2016  # $1/$2 are meant for the inner shell
+check "missing tuning file is fine"        bash -c 'source "$1"; tune_load_overrides "$2"' _ "$ROOT/scripts/lib/profile_tuning.sh" "$TMP/none"
+
+rt() { bash -c 'source "$1"; RAM="$2"; WORKER_MB="$3"; FORCE="$4"; fits_in_ram' _ "$ROOT/scripts/retune.sh" "$1" "${2:-60}" "${3:-0}"; }
+check "retune: default plan fits a 4 GB server"        rt 3889
+check_not "retune: an oversized plan is refused"       rt 2048 60 0
+check "retune: --force overrides the memory check"     rt 2048 60 1
+check "retune --help works"                            bash "$ROOT/scripts/retune.sh" --help
+check_not "retune rejects an unknown flag"             bash "$ROOT/scripts/retune.sh" --bogus
+check_not "retune needs root and an install"           bash "$ROOT/scripts/retune.sh"
+
 echo "── syntax"
-for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/*/*.sh; do
+for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"
 done
 

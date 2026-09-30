@@ -268,6 +268,10 @@ revert_redis() {
   else
     info "Redis data kept in /var/lib/redis (pass --purge-data to delete)"
   fi
+  if [[ -f /etc/sysctl.d/99-pulsedeploy-redis.conf ]]; then
+    run_or_echo rm -f /etc/sysctl.d/99-pulsedeploy-redis.conf
+    run_or_echo sysctl -w vm.overcommit_memory=0
+  fi
   if applied; then log "Redis removed"; else info "(dry-run) would remove Redis"; fi
   return 0
 }
