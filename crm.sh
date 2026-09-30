@@ -299,7 +299,7 @@ print_plan() {
   printf '  %-22s %s\n' "Server setup" "$([[ "$SKIP_SERVER" -eq 1 ]] && echo skipped || echo "bootstrap.sh -s laravel-next ${CD_SERVER_OPT[*]} $([[ $CERTBOT -eq 1 ]] && echo 'with TLS')")"
   printf '  %-22s %s\n' "Components" "${ONLY:-backend, admin, storefront}"
   local access="none"
-  if [[ -n "$CRM_GIT_TOKEN" ]]; then access="token"; elif [[ -n "$GIT_SSH_KEY" ]]; then access="ssh key"; fi
+  if [[ -n "$GIT_TOKEN_FILE" || -n "${PULSE_GIT_TOKEN:-}" ]]; then access="token"; elif [[ -n "$GIT_SSH_KEY" ]]; then access="ssh key"; fi
   printf '  %-22s %s\n' "Private repo access" "$access"
   echo
 }
