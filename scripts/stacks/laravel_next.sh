@@ -66,9 +66,22 @@ lnx_default_php() {
   fi
   if [[ "$PKG_MANAGER" == "dnf" ]]; then
     # Amazon Linux / RHEL-family: versioned packages such as php8.3-fpm
-    local avail=""
-    avail="$(pm_rpm list --available 'php8.*-fpm' 2>/dev/null || true)"
-    cand="$(grep -o 'php8\.[2-4]-fpm' <<<"$avail" | sed 's/^php//; s/-fpm$//' | sort -V | tail -n 1)" || cand=""
+    local avail="" have="" v=""
+    have="$(rpm -qa --qf '%{NAME}\n' 'php8.*-common' 2>/dev/null | sed -n 's/^php\(8\.[0-9]*\)-common$/\1/p' | sort -V)" || have=""
+    if [[ -n "$have" ]]; then
+      # Different php8.x versions conflict on the same machine: keep the installed one.
+      for v in $have; do
+        if [[ "$v" =~ ^8\.[2-4]$ ]]; then cand="$v"; break; fi
+      done
+      if [[ -z "$cand" ]]; then
+        error "PHP $(tr '\n' ' ' <<<"$have")is installed, but only PHP 8.2-8.4 is supported and versions cannot coexist.
+  Remove it first, then re-run:  sudo dnf remove 'php8*'"
+      fi
+      info "Using the PHP already installed: ${cand}"
+    else
+      avail="$(pm_rpm list --available 'php8.*-fpm' 2>/dev/null || true)"
+      cand="$(grep -o 'php8\.[2-4]-fpm' <<<"$avail" | sed 's/^php//; s/-fpm$//' | sort -V | tail -n 1)" || cand=""
+    fi
   fi
   if [[ "$cand" =~ ^8\.[2-4]$ ]]; then PHP_VER="$cand"; else PHP_VER="8.3"; fi
   info "PHP version: ${PHP_VER} (Laravel needs 8.2 or newer)"
