@@ -245,10 +245,25 @@ lnx_tune_mysql() {
 }
 
 # ── Laravel .env (only when absent; never overwrites the app's own file) ──────
+# Append KEY=VALUE to an env file only when the key is not there yet.
+lnx_env_add_default() { # lnx_env_add_default <file> <key> <value>
+  local file="$1" key="$2" value="$3"
+  grep -q "^${key}=" "$file" && return 0
+  printf '%s=%s\n' "$key" "$value" >>"$file"
+}
+
+# Laravel 11 defaults to utf8mb4_0900_ai_ci, a collation only MySQL 8 has.
+lnx_mariadb_env_defaults() { # lnx_mariadb_env_defaults <env file>
+  mysql_is_mariadb || return 0
+  lnx_env_add_default "$1" DB_CHARSET utf8mb4
+  lnx_env_add_default "$1" DB_COLLATION utf8mb4_unicode_ci
+}
+
 lnx_write_env() {
   local env="$LNX_APPS_ROOT/api/shared/.env" pass
   if [[ -e "$env" ]]; then
     info "Laravel .env already exists; left unchanged"
+    lnx_mariadb_env_defaults "$env"
     return 0
   fi
   pass="$(mysql_saved_password "$DB_USER")"
@@ -294,6 +309,7 @@ MAIL_MAILER=log
 FILESYSTEM_DISK=local
 ENV
   )
+  lnx_mariadb_env_defaults "$env"
   chown "$APP_USER:$APP_USER" "$env"
   chmod 640 "$env"
   log "Wrote $env (APP_KEY is generated on the first deploy)"
