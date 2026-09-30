@@ -230,6 +230,127 @@ echo "── tenant database grants"
 ); rc=$?
 if [[ $rc -eq 0 ]]; then ok "tenant prefix grant: pattern escaped, skipped when unset, injection rejected"; else bad "tenant grant (exit $rc)"; fi
 
+echo "── crm.sh: definitions, placeholders, config patching"
+# shellcheck disable=SC2016  # literal $( ) text is the point of these checks
+(
+  # shellcheck source=scripts/lib/crm.sh
+  source "$ROOT/scripts/lib/crm.sh"
+  f="$TMP/def.conf"
+  printf '# comment\r\nNAME=My App\r\n\r\nA_LIST+=one\nA_LIST+=two words\nMODE=x=y\n' >"$f"
+  registry_load "$f" T "NAME MODE MISSING" "A_LIST"
+  [[ "$T_NAME" == "My App" ]] || exit 1                       # CRLF tolerated, spaces kept
+  [[ "${#T_A_LIST[@]}" -eq 2 && "${T_A_LIST[1]}" == "two words" ]] || exit 2
+  [[ "$T_MODE" == "x=y" ]] || exit 3                          # only the first "=" splits
+  [[ -z "$T_MISSING" ]] || exit 4                             # undefined scalar is empty, not unset
+  printf 'EVIL=$(touch %s/pwned)\n' "$TMP" >"$f"
+  if ( registry_load "$f" T "NAME" "" ) >/dev/null 2>&1; then exit 5; fi     # unknown key rejected
+  printf 'NAME+=x\n' >"$f"
+  if ( registry_load "$f" T "NAME" "" ) >/dev/null 2>&1; then exit 6; fi     # += on a scalar rejected
+  printf 'NAME=$(touch %s/pwned2)\n' "$TMP" >"$f"; registry_load "$f" T "NAME" ""
+  [[ ! -e "$TMP/pwned2" && "$T_NAME" == *'$(touch'* ]] || exit 7             # values are data, never executed
+  printf 'not a valid line\n' >"$f"
+  if ( registry_load "$f" T "NAME" "" ) >/dev/null 2>&1; then exit 8; fi
+  CRM_VARS=([STORE]="a&b" [API_URL]="https://api.x.com")
+  [[ "$(crm_expand 'u={API_URL}/api s={STORE}')" == "u=https://api.x.com/api s=a&b" ]] || exit 9   # "&" stays literal
+  if ( crm_expand 'x={NOPE}' ) >/dev/null 2>&1; then exit 10; fi                                   # typo'd placeholder fails
+  exit 0
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "definitions parsed as data; placeholders filled; bad input rejected"; else bad "crm definitions/placeholders (exit $rc)"; fi
+
+(
+  # shellcheck source=scripts/lib/crm.sh
+  source "$ROOT/scripts/lib/crm.sh"
+  # shellcheck disable=SC2030,SC2031  # subshell-local on purpose
+  APP_USER="$(id -un)"
+  d="$TMP/next"; mkdir -p "$d"
+  patch() { printf '%s\n' "$2" >"$d/$1"; crm_ensure_standalone "$d" >/dev/null 2>&1; }
+  # the exact style used by the AvenTech admin app
+  patch next.config.ts 'import type { NextConfig } from "next";
+const nextConfig: NextConfig = {
+  allowedDevOrigins: ["127.0.0.1"],
+};
+export default nextConfig;' || exit 1
+  grep -q 'output: "standalone"' "$d/next.config.ts" || exit 2
+  [[ "$(grep -c 'output:' "$d/next.config.ts")" -eq 1 ]] || exit 3
+  crm_ensure_standalone "$d" >/dev/null 2>&1; [[ "$(grep -c 'output:' "$d/next.config.ts")" -eq 1 ]] || exit 4   # idempotent
+  rm -f "$d"/next.config.*
+  patch next.config.js 'module.exports = { reactStrictMode: true };' || exit 5
+  grep -q 'output: "standalone"' "$d/next.config.js" || exit 6
+  rm -f "$d"/next.config.*
+  patch next.config.mjs 'export default { reactStrictMode: true };' || exit 8
+  grep -q 'output: "standalone"' "$d/next.config.mjs" || exit 9
+  rm -f "$d"/next.config.*
+  # a comment that mentions the setting must not count as the setting
+  patch next.config.js '/** not using output: "standalone" here yet */
+// output: "export" was tried once
+module.exports = { reactStrictMode: true };' || exit 12
+  [[ "$(grep -c '^  output: "standalone",' "$d/next.config.js")" -eq 1 ]] || exit 13
+  rm -f "$d"/next.config.*
+  printf 'const c = { output: "export" };\nmodule.exports = c;\n' >"$d/next.config.js"
+  if ( crm_ensure_standalone "$d" ) >/dev/null 2>&1; then exit 10; fi      # a conflicting output mode is refused (error() exits, so isolate it)
+  rm -f "$d"/next.config.*
+  if ( crm_ensure_standalone "$d" ) >/dev/null 2>&1; then exit 11; fi      # not a Next.js app
+  exit 0
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "standalone output enabled for ts/js/mjs configs, idempotent, conflicts refused"; else bad "next config patching (exit $rc)"; fi
+
+(
+  # shellcheck source=scripts/lib/crm.sh
+  source "$ROOT/scripts/lib/crm.sh"
+  # shellcheck disable=SC2030,SC2031  # subshell-local on purpose
+  APP_USER="$(id -un)"
+  e="$TMP/app.env"; printf 'KEEP=mine\n' >"$e"
+  crm_env_put "$e" KEEP theirs; crm_env_put "$e" NEWKEY "has space & quote\"" ; crm_env_put "$e" PLAIN value
+  grep -Fxq 'KEEP=mine' "$e" || exit 1                     # existing value kept by default
+  grep -Fxq 'NEWKEY="has space & quote\""' "$e" || exit 2   # awkward values are quoted and escaped
+  crm_env_put "$e" KEEP theirs overwrite; grep -Fxq 'KEEP=theirs' "$e" || exit 3
+  if ( crm_env_put "$e" 'BAD KEY' x ) >/dev/null 2>&1; then exit 4; fi
+  exit 0
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "env files: existing values kept, overwrite on request, values quoted, bad names rejected"; else bad "crm env handling (exit $rc)"; fi
+
+(
+  # shellcheck source=scripts/lib/crm.sh
+  source "$ROOT/scripts/lib/crm.sh"
+  CRM_GIT_TOKEN="tok-SECRET-123"; CRM_GIT_SSH_KEY_EFFECTIVE=""
+  crm_git_setup
+  env_line="${CRM_RUN_ENV[*]}"
+  helper=""
+  for e in "${CRM_RUN_ENV[@]}"; do [[ "$e" == GIT_ASKPASS=* ]] && helper="${e#GIT_ASKPASS=}"; done
+  [[ -x "$helper" ]] || exit 1
+  [[ "$("$helper" "Username for 'https://github.com': ")" == "x-access-token" ]] || exit 2
+  [[ "$(PULSE_GIT_TOKEN=tok-SECRET-123 "$helper" "Password for 'https://x-access-token@github.com': ")" == "tok-SECRET-123" ]] || exit 3
+  grep -q 'SECRET' "$helper" && exit 4                       # the helper script itself holds no secret
+  [[ "$env_line" == *"GIT_TERMINAL_PROMPT=0"* ]] || exit 5   # never hang waiting for a prompt
+  CRM_GIT_TOKEN=""; CRM_GIT_SSH_KEY_EFFECTIVE="/keys/deploy"; crm_git_setup
+  [[ "${CRM_RUN_ENV[*]}" == *"GIT_SSH_COMMAND=ssh -i /keys/deploy -o IdentitiesOnly=yes -o BatchMode=yes"* ]] || exit 6
+  [[ "${CRM_RUN_ENV[*]}" != *ASKPASS* ]] || exit 7
+  exit 0
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "git auth: token answered via askpass from the environment (not stored), ssh key command built"; else bad "crm git auth (exit $rc)"; fi
+
+C=(bash "$ROOT/crm.sh")
+check_not "crm: install without --domain"          "${C[@]}" install --storefront none
+check_not "crm: install without --storefront"      "${C[@]}" install --domain example.com
+check_not "crm: unknown storefront id"             "${C[@]}" install --domain example.com --storefront nope --dry-run
+check_not "crm: --certbot without --email"         "${C[@]}" install --domain example.com --storefront none --certbot --dry-run
+check_not "crm: bad --only value"                  "${C[@]}" install --domain example.com --storefront none --only backend,foo --dry-run
+check_not "crm: bad git url"                       "${C[@]}" install --domain example.com --storefront none --crm-repo "ftp://x" --dry-run
+check_not "crm: bad ref"                           "${C[@]}" install --domain example.com --storefront none --crm-ref "a b" --dry-run
+check_not "crm: bad store slug"                    "${C[@]}" install --domain example.com --storefront none --store "Bad Slug" --dry-run
+check_not "crm: short admin password"              "${C[@]}" install --domain example.com --storefront none --admin-password short --dry-run
+check_not "crm: bad build env"                     "${C[@]}" install --domain example.com --storefront https://github.com/o/r.git --storefront-build-env "no-equals" --dry-run
+check_not "crm: unknown option"                    "${C[@]}" install --domain example.com --storefront none --bogus
+check     "crm: help works"                        "${C[@]}" help
+check     "crm: storefronts list works"            "${C[@]}" storefronts
+plan="$("${C[@]}" install --domain example.com --storefront https://github.com/o/shop.git --storefront-ref v2 --store acme --store-name "Acme Shop" --cloudflare --dry-run 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+if [[ "$plan" == *"https://api.example.com"* && "$plan" == *"shop.git @ v2"* && "$plan" == *"slug acme"* ]]; then ok "crm: dry-run plan shows hosts (https via --cloudflare), storefront @ ref, store"; else bad "crm dry-run plan" "$plan"; fi
+regdir="$TMP/reg"; mkdir -p "$regdir/storefronts"; printf 'NAME=Custom Shop\nREPO=https://github.com/o/custom.git\nREF=stable\nBUILD_ENV+=NEXT_PUBLIC_API_URL={API_URL}/api\n' >"$regdir/storefronts/custom.conf"
+listing="$("${C[@]}" storefronts --registry-dir "$regdir" 2>&1)"
+if [[ "$listing" == *custom* ]]; then ok "crm: extra registry directory is listed"; else bad "crm registry-dir listing" "$listing"; fi
+plan2="$("${C[@]}" install --domain example.com --storefront custom --registry-dir "$regdir" --dry-run 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+if [[ "$plan2" == *"Custom Shop"* && "$plan2" == *"custom.git @ stable"* ]]; then ok "crm: storefront picked from the registry by id"; else bad "crm registry storefront" "$plan2"; fi
+
 echo "── pulse CLI: deploy / rollback / prune (fake services)"
 FB="$TMP/fakebin"; mkdir -p "$FB"
 printf '#!/bin/sh\necho "$@" >> "%s/systemctl.log"\nexit 0\n' "$TMP" >"$FB/systemctl"

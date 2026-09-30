@@ -1,0 +1,15 @@
+# Copy to <id>.conf (for example k-luxe.conf) and edit. Files ending in
+# .disabled are ignored.
+NAME=My Storefront
+REPO=https://github.com/your-org/your-storefront.git
+REF=main
+DIR=.
+BUILD_CMD=npm ci && npm run build
+
+# Compiled into the client bundle
+BUILD_ENV+=NEXT_PUBLIC_API_URL={API_URL}/api
+BUILD_ENV+=NEXT_PUBLIC_STORE={STORE}
+
+# Read by the Node server at run time (server-side calls use the loopback API)
+RUNTIME_ENV+=API_INTERNAL_URL={INTERNAL_API_URL}/api
+RUNTIME_ENV+=STORE_SUBDOMAIN={STORE}
