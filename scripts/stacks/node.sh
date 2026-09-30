@@ -28,6 +28,18 @@ node_install_runtime() {
   [[ -s "$setup" ]] || error "NodeSource setup script downloaded empty from $setup_url"
   bash "$setup"
   rm -f "$setup"
+  if [[ "$PKG_MANAGER" == "dnf" ]]; then
+    # "dnf install" keeps an already-installed distro nodejs (e.g. Amazon Linux's v18)
+    # instead of upgrading to the repo just added, so replace a wrong major first.
+    local have=""
+    have="$(rpm -q --qf '%{VERSION}' nodejs 2>/dev/null)" || have=""
+    if [[ -n "$have" && "${have%%.*}" != "$NODE_VER" ]]; then
+      info "Replacing the installed Node.js ${have} with ${NODE_VER}.x"
+      local -a old_pkgs=()
+      mapfile -t old_pkgs < <(rpm -qa --qf '%{NAME}\n' 'nodejs*' 'npm' 2>/dev/null | sort -u)
+      pm_rpm remove -y -q "${old_pkgs[@]}" || warn "Could not remove the existing nodejs packages."
+    fi
+  fi
   os_pkg_install nodejs
 
   local actual
