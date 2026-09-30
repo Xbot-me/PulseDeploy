@@ -33,7 +33,7 @@ install_mysql() {
   # Versioned MariaDB packages conflict with each other: keep one that is already installed.
   if [[ "$OS_ID" == "amzn" ]]; then
     local have=""
-    have="$(rpm -qa --qf '%{NAME}\n' 'mariadb*-server' 2>/dev/null | head -n 1)" || have=""
+    have="$(rpm -qa --qf '%{NAME}\n' 2>/dev/null | grep -E '^mariadb[0-9]*-server$' | head -n 1)" || have=""
     if [[ -n "$have" ]]; then candidates=("$have"); fi
   fi
   pkg_install_first "${candidates[@]}" ||

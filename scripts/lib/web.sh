@@ -191,9 +191,16 @@ nginx_activate() {
     cp -a "$site" "$previous"
   fi
   cp "$src" "$site"
-  if ! nginx -t; then
+  local test_out=""
+  if ! test_out="$(nginx -t 2>&1)"; then
+    printf '%s\n' "$test_out" >&2
     if [[ -n "$previous" ]]; then cp -a "$previous" "$site"; else rm -f "$site"; fi
     [[ -n "$previous" ]] && rm -f "$previous"
+    # Still failing without our file: the existing configuration is broken, not ours.
+    if ! nginx -t &>/dev/null; then
+      error "nginx was already failing before PulseDeploy's change (see the nginx error above); our file was rolled back.
+  Fix or move aside the file it names (for example: sudo mv <file> /root/), then re-run."
+    fi
     error "Generated nginx configuration is invalid (see output above); it was rolled back."
   fi
   [[ -n "$previous" ]] && rm -f "$previous"
