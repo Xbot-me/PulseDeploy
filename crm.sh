@@ -310,7 +310,20 @@ prepare_git() {
     CRM_GIT_TOKEN="$(tr -d '[:space:]' <"$GIT_TOKEN_FILE")"
   fi
   CRM_GIT_SSH_KEY_EFFECTIVE="$GIT_SSH_KEY"
+  # An SSH key only applies to ssh-style URLs, so convert https://host/owner/repo
+  if [[ -n "$GIT_SSH_KEY" && -z "$GIT_TOKEN_FILE" ]]; then
+    CD_REPO="$(git_https_to_ssh "$CD_REPO")"
+    SF_REPO="$(git_https_to_ssh "$SF_REPO")"
+  fi
   crm_git_setup
+}
+
+git_https_to_ssh() {
+  if [[ "$1" =~ ^https://([A-Za-z0-9.-]+)/(.+)$ ]]; then
+    echo "git@${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+  else
+    echo "$1"
+  fi
 }
 
 preflight_git() {
