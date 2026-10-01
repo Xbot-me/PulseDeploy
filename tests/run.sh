@@ -504,6 +504,16 @@ check "retune --help works"                            bash "$ROOT/scripts/retun
 check_not "retune rejects an unknown flag"             bash "$ROOT/scripts/retune.sh" --bogus
 check_not "retune needs root and an install"           bash "$ROOT/scripts/retune.sh"
 
+echo "── repository URL validation"
+vurl() { bash -c 'source <(sed -n "/^valid_git_url()/p" "$1"); valid_git_url "$2"' _ "$ROOT/crm.sh" "$1"; }
+check "https URL accepted"                     vurl https://github.com/o/r.git
+check "ssh form accepted"                      vurl git@github.com:o/r.git
+check "local clone accepted"                   vurl file:///srv/crm.git
+check_not "relative path rejected"             vurl ./crm.git
+check_not "option-looking value rejected"      vurl --upload-pack=evil
+check_not "file URL with spaces rejected"      vurl "file:///srv/a b"
+check_not "file URL with shell characters rejected" vurl 'file:///srv/x;rm'
+
 echo "── syntax"
 for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"

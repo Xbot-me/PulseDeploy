@@ -62,7 +62,7 @@ ${BOLD}FIRST STORE${RESET}
 
 ${BOLD}WHAT TO INSTALL${RESET}
   --crm <id>                 CRM definition in apps/crm/ (default: aventech)
-  --crm-repo <url>           Override the CRM repository
+  --crm-repo <url>           Override the CRM repository (a local clone works too: file:///srv/crm.git)
   --crm-ref <ref>            Branch, tag or commit (default from the definition)
   --storefront-ref <ref>     Storefront branch, tag or commit
   --storefront-dir <path>    Folder inside the storefront repo holding package.json
@@ -184,7 +184,8 @@ list_storefronts() {
   echo "Add your own by copying apps/storefronts/sample.conf.disabled to <id>.conf"
 }
 
-valid_git_url() { [[ "$1" =~ ^(https://|http://|ssh://|git@)[A-Za-z0-9._@:/~+-]+$ ]]; }
+# file:/// is a clone on this machine: the way in when GitHub cannot be reached reliably
+valid_git_url() { [[ "$1" =~ ^(https://|http://|ssh://|git@|file:///)[A-Za-z0-9._@:/~+-]+$ ]]; }
 valid_ref()     { [[ "$1" =~ ^[A-Za-z0-9._/@-]{1,100}$ && "$1" != *..* ]]; }
 valid_subdir()  { [[ "$1" =~ ^[A-Za-z0-9._/-]*$ && "$1" != *..* && "$1" != /* ]]; }
 valid_kv()      { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; }
