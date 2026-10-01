@@ -7,7 +7,7 @@ server serve before it hurts, and what breaks first?", for a server you own.
 
 ```bash
 # from your laptop or a second VM, NOT from the server being tested
-bash loadtest/run.sh --ip 172.20.119.56 --domain crm.test \
+bash loadtest/run.sh --ip 203.0.113.10 --domain crm.test \
      --email admin@crm.test --password-file ~/lt-password \
      --profile average --users 20 --hold 600
 ```

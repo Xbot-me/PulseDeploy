@@ -2,7 +2,7 @@
 # =============================================================================
 # PulseDeploy - loadtest/run.sh: human-like load against a server you own
 #
-#   bash loadtest/run.sh --ip 172.20.119.56 --domain crm.test \
+#   bash loadtest/run.sh --ip 203.0.113.10 --domain crm.test \
 #        --email admin@crm.test --password-file ~/lt-password --profile average --users 20
 #
 # Run it from a DIFFERENT machine than the server (your laptop or a second VM): load
@@ -108,7 +108,7 @@ while [[ $# -gt 0 ]]; do
     --no-venv) NO_VENV=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     -h | --help) usage; exit 0 ;;
-    ... | …) error "'...' in the documentation stands for your target options: write them out, for example --ip 172.20.119.56 --domain crm.test --email admin@crm.test --password-file ~/lt-password" ;;
+    ... | …) error "'...' in the documentation stands for your target options: write them out, for example --ip 203.0.113.10 --domain crm.test --email admin@crm.test --password-file ~/lt-password" ;;
     *) error "Unknown option: $1 (see --help)" ;;
   esac
 done
