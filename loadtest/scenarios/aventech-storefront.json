@@ -1,0 +1,42 @@
+{
+  "name": "aventech-storefront",
+  "description": "Shoppers calling the CRM's public storefront API: home content, categories, discounts, recommendations, and (only with writes enabled) a guest cart. The CRM repository has no product listing or search endpoint for shoppers, so add your storefront's own calls here or in a copy of this file.",
+  "hosts": ["api"],
+  "headers": { "api": { "X-Store-Subdomain": "{store}", "X-Cart-Session": "{cart_session?}" } },
+  "think": { "median": 8, "sigma": 0.8, "min": 1.0, "max": 120 },
+  "session": {
+    "journeys": { "median": 2.5, "sigma": 0.5, "min": 1, "max": 6 },
+    "gap": { "median": 20, "sigma": 0.8, "min": 3, "max": 300 }
+  },
+  "discover": [
+    { "name": "staff login (to learn product ids)", "host": "api", "method": "POST", "path": "/api/v1/admin/login",
+      "json": { "email": "{email}", "password": "{password}" }, "extract": { "token": "data.token" } },
+    { "name": "list products for ids", "host": "api", "path": "/api/v1/admin/products?per_page=50",
+      "headers": { "Authorization": "Bearer {token}" }, "extract_shared": { "product_ids": "data.data[*].id" } }
+  ],
+  "journeys": [
+    { "name": "land on the home page", "weight": 10, "steps": [
+      { "name": "home: web info", "host": "api", "path": "/api/v1/storefront/web-info", "think": { "median": 0.3, "sigma": 0.4, "max": 1.5 } },
+      { "name": "home: banners", "host": "api", "path": "/api/v1/storefront/banners", "think": { "median": 0.2, "sigma": 0.4, "max": 1 } },
+      { "name": "home: sliders", "host": "api", "path": "/api/v1/storefront/sliders", "think": { "median": 0.2, "sigma": 0.4, "max": 1 } },
+      { "name": "home: categories", "host": "api", "path": "/api/v1/storefront/categories", "think": { "median": 0.3, "sigma": 0.4, "max": 1.5 } },
+      { "name": "home: brands", "host": "api", "path": "/api/v1/storefront/brands", "think": { "median": 6, "sigma": 0.8, "max": 60 }, "continue_p": 0.75 },
+      { "name": "home: testimonials", "host": "api", "path": "/api/v1/storefront/testimonials" }
+    ] },
+    { "name": "look at offers", "weight": 3, "steps": [
+      { "name": "offers: discounts", "host": "api", "path": "/api/v1/storefront/discounts", "think": { "median": 9, "sigma": 0.7, "max": 60 } },
+      { "name": "offers: categories", "host": "api", "path": "/api/v1/storefront/categories" }
+    ] },
+    { "name": "read about a product", "weight": 5, "steps": [
+      { "name": "product: categories", "host": "api", "path": "/api/v1/storefront/categories", "think": { "median": 7, "sigma": 0.8, "max": 60 } },
+      { "name": "product: recommendations", "host": "api", "path": "/api/v1/storefront/recommendations/products/{any:product_ids}", "expect": [200, 404] }
+    ] },
+    { "name": "put something in the cart (writes data)", "weight": 3, "writes": true, "steps": [
+      { "name": "cart: open", "host": "api", "path": "/api/v1/storefront/cart", "writes": true,
+        "extract": { "cart_session": { "header": "X-Cart-Session" } }, "think": { "median": 6, "sigma": 0.7, "max": 40 } },
+      { "name": "cart: add item", "host": "api", "method": "POST", "path": "/api/v1/storefront/cart/items", "writes": true,
+        "json": { "product_id": "{any:product_ids}", "qty": 1 }, "expect": [200, 201, 422], "think": { "median": 5, "sigma": 0.7, "max": 40 }, "continue_p": 0.8 },
+      { "name": "cart: view", "host": "api", "path": "/api/v1/storefront/cart", "writes": true }
+    ] }
+  ]
+}

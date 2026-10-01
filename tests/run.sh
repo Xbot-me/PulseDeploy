@@ -514,8 +514,27 @@ check_not "option-looking value rejected"      vurl --upload-pack=evil
 check_not "file URL with spaces rejected"      vurl "file:///srv/a b"
 check_not "file URL with shell characters rejected" vurl 'file:///srv/x;rm'
 
+echo "── load-test module"
+check "loadtest/run.sh --help works"                  bash "$ROOT/loadtest/run.sh" --help
+check_not "loadtest/run.sh needs a target"            bash "$ROOT/loadtest/run.sh" --scenario aventech-admin
+check_not "loadtest/run.sh rejects an unknown flag"   bash "$ROOT/loadtest/run.sh" --bogus
+check_not "loadtest/run.sh refuses an oversized plan" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --profile spike --users 80 --check
+check_not "loadtest/run.sh without a terminal needs --yes" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test </dev/null
+check "loadtest/run.sh --check validates and sends nothing" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin:1,aventech-storefront:3 --check
+if command -v python3 >/dev/null 2>&1; then
+  check "loadtest python files compile"               python3 -m py_compile "$ROOT/loadtest/humanlib.py" "$ROOT/loadtest/locustfile.py" "$ROOT/loadtest/tests/mock_server.py"
+  check "loadtest unit tests (behaviour model)"       python3 -m unittest discover -s "$ROOT/loadtest/tests" -p 'test_humanlib.py'
+  if [[ "${PULSE_TEST_ENGINE:-0}" == "1" ]]; then
+    check "loadtest engine tests (real Locust, mock CRM)" python3 -m unittest "$ROOT/loadtest/tests/test_engine.py"
+  else
+    echo "  skip loadtest engine tests (set PULSE_TEST_ENGINE=1 with locust installed)"
+  fi
+else
+  echo "  skip loadtest python tests (python3 not found)"
+fi
+
 echo "── syntax"
-for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/scripts/*/*.sh; do
+for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/loadtest/run.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"
 done
 
