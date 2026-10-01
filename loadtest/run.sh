@@ -136,6 +136,11 @@ if [[ -n "$PASSWORD_FILE" ]]; then
   [[ -r "$PASSWORD_FILE" ]] || error "Cannot read --password-file $PASSWORD_FILE"
   PASSWORD="$(tr -d '\r\n' <"$PASSWORD_FILE")"
 fi
+if [[ "$PASSWORD" =~ [[:cntrl:]] ]]; then
+  error "The password contains control characters. Pasting into a terminal often adds invisible markers (shown as ^[[200~ and ~).
+  Recreate the file by typing the password at a prompt:   read -rs -p 'Password: ' p; printf '%s' \"\$p\" > FILE; unset p
+  and check it with:   cat -A FILE   (it must show only the password)"
+fi
 
 # the largest number of people the run can put on the site
 case "$PROFILE" in
