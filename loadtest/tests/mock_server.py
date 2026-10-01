@@ -9,6 +9,7 @@ app, anything else is the API.
   MOCK_FAIL_RATE     fraction of API calls answered with HTTP 500
   MOCK_MAX_INFLIGHT  answer 500 when more requests than this are in flight (to find a "breakpoint")
   MOCK_LOGIN_LIMIT   logins allowed per rolling minute before HTTP 429
+  MOCK_LOGIN_PER_EMAIL  like the CRM's throttle:login: logins allowed per minute for one email
 """
 import json
 import os
@@ -23,6 +24,7 @@ STATS = Counter()
 UAS = set()
 LOCK = threading.Lock()
 LOGINS = []
+LOGINS_BY_EMAIL = {}
 INFLIGHT = [0]
 PAGE = ('<html><head><link rel="stylesheet" href="/_next/static/css/app.css"></head>'
         '<body><script src="/_next/static/chunks/main.js"></script>'
@@ -94,6 +96,16 @@ class Handler(BaseHTTPRequestHandler):
                     STATS["login 429"] += 1
                     return self.reply(429, {"success": False, "message": "slow down"})
                 LOGINS.append(now)
+            per_email = int(os.environ.get("MOCK_LOGIN_PER_EMAIL", "0"))
+            if per_email:
+                key = str(body.get("email", "")).lower()
+                with LOCK:
+                    recent = [t for t in LOGINS_BY_EMAIL.get(key, []) if now - t < 60]
+                    if len(recent) >= per_email:
+                        LOGINS_BY_EMAIL[key] = recent
+                        STATS["login 429 per email"] += 1
+                        return self.reply(429, {"success": False, "message": "Too many attempts."})
+                    LOGINS_BY_EMAIL[key] = recent + [now]
             if body.get("password") != "secret" or not self.headers.get("X-Store-Subdomain"):
                 return self.reply(401, {"success": False, "message": "Invalid credentials."})
             return self.reply(200, {"success": True, "data": {"token": "tok"}}, {"Set-Cookie": "auth_token=tok; Path=/; HttpOnly"})

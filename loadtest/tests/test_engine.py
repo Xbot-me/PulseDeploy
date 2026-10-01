@@ -82,6 +82,14 @@ class Engine(unittest.TestCase):
         self.assertIn("RESULT: PASS", proc.stdout)
         self.assertTrue(proc.stdout.rstrip().endswith("RESULT: PASS"))
 
+    def test_people_sharing_one_account_log_in_once(self):
+        # the CRM allows 5 logins a minute per account: twelve people must not trip that
+        proc, summary, seen = run_engine("aventech-admin", SMOKE, {"MOCK_LOGIN_PER_EMAIL": "5"})
+        self.assertEqual(proc.returncode, 0, proc.stdout[-800:])
+        self.assertEqual(seen.get("POST /api/auth/login"), 1)
+        self.assertEqual(seen.get("login 429 per email", 0), 0)
+        self.assertEqual(seen.get("page without cookie", 0), 0)  # the shared session reached everyone
+
     def test_a_failing_server_fails_the_run_with_exit_code_1(self):
         proc, summary, _ = run_engine("aventech-admin", SMOKE, {"MOCK_FAIL_RATE": "0.4"})
         self.assertEqual(proc.returncode, 1)
@@ -109,8 +117,23 @@ class EngineSlow(unittest.TestCase):
         self.assertGreater(seen.get("cart writes", 0), 0)
         self.assertEqual(summary["problems"], [])
 
+    def test_one_account_per_person_when_an_accounts_file_is_given(self):
+        accounts = Path(tempfile.mkdtemp()) / "accounts.txt"
+        accounts.write_text("a@x.com:secret\nb@x.com:secret\nc@x.com:secret\n")
+        proc, summary, seen = run_engine("aventech-admin", dict(SMOKE, LT_ACCOUNTS_FILE=str(accounts)), {"MOCK_LOGIN_PER_EMAIL": "5"})
+        self.assertEqual(proc.returncode, 0, proc.stdout[-800:])
+        self.assertEqual(seen.get("POST /api/auth/login"), 5)  # five people, each with their own login
+        self.assertEqual(seen.get("login 429 per email", 0), 0)
+
+    def test_without_sharing_the_account_throttle_is_met_and_retried(self):
+        # reproduces the first real run: many people on one account behind a 5-per-minute throttle
+        proc, summary, seen = run_engine("aventech-admin", dict(SMOKE, LT_SHARE_LOGIN="0", LT_SMOKE_SECONDS="20"), {"MOCK_LOGIN_PER_EMAIL": "2"})
+        self.assertGreater(seen.get("login 429 per email", 0), 0)
+        self.assertEqual(proc.returncode, 0, proc.stdout[-800:])  # setup refusals do not fail the run
+        self.assertEqual(summary["problems"], [])
+
     def test_rate_limited_logins_are_retried_and_do_not_fail_the_run(self):
-        proc, summary, seen = run_engine("aventech-admin", {"LT_PROFILE": "smoke", "LT_SMOKE_SECONDS": "15"}, {"MOCK_LOGIN_LIMIT": "2"})
+        proc, summary, seen = run_engine("aventech-admin", {"LT_PROFILE": "smoke", "LT_SMOKE_SECONDS": "15", "LT_SHARE_LOGIN": "0"}, {"MOCK_LOGIN_LIMIT": "2"})
         self.assertGreater(seen.get("login 429", 0), 0)
         self.assertEqual(proc.returncode, 0, proc.stdout[-800:])
         self.assertEqual(summary["problems"], [])

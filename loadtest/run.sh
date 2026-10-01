@@ -18,6 +18,7 @@ source "$ROOT/scripts/lib/common.sh"
 
 SCENARIO="aventech-admin"; PROFILE="average"; USERS=20; HOLD=600; SPAWN="0.4"; STORE="main"
 EMAIL=""; PASSWORD_FILE=""; WRITES=0; MAX_FAIL="0.01"; P95_MS="1500"; TIME_SCALE="1"; SEED=""
+ACCOUNTS_FILE=""; SHARE_LOGIN=1
 OUT=""; ASSUME_YES=0; ALLOW_LARGE=0; CHECK_ONLY=0; VERBOSE=0; NO_VENV=0
 STEP_USERS=""; STEP_SECONDS=""; MAX_USERS=""; IP=""; DOMAIN=""
 declare -a BASES=() HOSTHDRS=()
@@ -42,6 +43,10 @@ WHAT TO RUN
   --store <slug>                  tenant (X-Store-Subdomain) to use (default main)
   --email <e> --password-file <f> staff login used by the scenarios (the password is never
                                   taken from the command line; or set LT_VAR_PASSWORD)
+  --accounts-file <f>             one "email:password" per line: each virtual person gets their own
+                                  account (cycled). Without it, everyone shares the one --email login
+  --no-share-login                with a single account, make every person log in (the CRM allows only
+                                  5 logins a minute per account, so expect refusals)
   --writes                        also run steps that write data (carts, orders). Use a
                                   dedicated test store, never real data
   --var <name>=<value>            extra {name} value for the scenarios, repeatable
@@ -85,6 +90,8 @@ while [[ $# -gt 0 ]]; do
     --store) need_value "$@"; STORE="$2"; shift 2 ;;
     --email) need_value "$@"; EMAIL="$2"; shift 2 ;;
     --password-file) need_value "$@"; PASSWORD_FILE="$2"; shift 2 ;;
+    --accounts-file) need_value "$@"; ACCOUNTS_FILE="$2"; shift 2 ;;
+    --no-share-login) SHARE_LOGIN=0; shift ;;
     --writes) WRITES=1; shift ;;
     --var) need_value "$@"; EXTRA_VARS+=("$2"); shift 2 ;;
     --max-fail) need_value "$@"; MAX_FAIL="$2"; shift 2 ;;
@@ -142,6 +149,13 @@ if [[ "$PASSWORD" =~ [[:cntrl:]] ]]; then
   and check it with:   cat -A FILE   (it must show only the password)"
 fi
 
+if [[ -n "$ACCOUNTS_FILE" ]]; then
+  [[ -r "$ACCOUNTS_FILE" ]] || error "Cannot read --accounts-file $ACCOUNTS_FILE"
+  if grep -q '[[:cntrl:]]' < <(tr -d '\r\n\t' <"$ACCOUNTS_FILE"); then
+    error "--accounts-file contains control characters (terminal paste markers?). Create it in a text editor."
+  fi
+fi
+
 # the largest number of people the run can put on the site
 case "$PROFILE" in
   smoke) PEAK=5 ;;
@@ -194,6 +208,14 @@ for b in "${BASES[@]}"; do
   printf '  %-14s %s%s\n' "Target $key" "${b#*=}" "$hh"
 done
 printf '  %-14s %s\n' "Store" "$STORE"
+if [[ -n "$ACCOUNTS_FILE" ]]; then
+  LOGIN_NOTE="one account per person ($(grep -c . "$ACCOUNTS_FILE") accounts)"
+elif [[ "$SHARE_LOGIN" -eq 1 ]]; then
+  LOGIN_NOTE="one shared account, logged in once"
+else
+  LOGIN_NOTE="one shared account, every person logs in"
+fi
+printf '  %-14s %s\n' "Logins" "$LOGIN_NOTE"
 printf '  %-14s %s\n' "Writes data" "$([[ $WRITES -eq 1 ]] && echo 'YES (carts / orders are created)' || echo no)"
 printf '  %-14s fail > %s%% or p95 > %s ms\n' "Fails when" "$(awk -v f="$MAX_FAIL" 'BEGIN { printf "%g", f * 100 }')" "$P95_MS"
 printf '  %-14s %s\n' "Results" "$OUT"
@@ -225,7 +247,8 @@ fi
 mkdir -p "$OUT"
 export LT_SCENARIO="$SCENARIO" LT_PROFILE="$PROFILE" LT_USERS="$USERS" LT_HOLD="$HOLD" LT_SPAWN="$SPAWN"
 export LT_WRITES="$WRITES" LT_MAX_FAIL="$MAX_FAIL" LT_P95_MS="$P95_MS" LT_TIME_SCALE="$TIME_SCALE" LT_OUT="$OUT"
-export LT_VAR_STORE="$STORE"
+export LT_VAR_STORE="$STORE" LT_SHARE_LOGIN="$SHARE_LOGIN"
+[[ -z "$ACCOUNTS_FILE" ]] || export LT_ACCOUNTS_FILE="$ACCOUNTS_FILE"
 [[ -z "$EMAIL" ]] || export LT_VAR_EMAIL="$EMAIL"
 [[ -z "$PASSWORD" ]] || export LT_VAR_PASSWORD="$PASSWORD"
 [[ -z "$SEED" ]] || export LT_SEED="$SEED"

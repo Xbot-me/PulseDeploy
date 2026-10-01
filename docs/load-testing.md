@@ -54,9 +54,15 @@ the behaviour model and the scenario format can drive any other HTTP client.
 * More than 200 users at the peak needs `--allow-large`.
 * Every request carries `X-Load-Test: <run id>` so you can find or filter it in server logs.
 * The password is read from a file or the environment, never from the command line.
-* The staff login is rate limited by nginx (30 per minute per IP). Users are started
-  gradually (`--spawn`, default 0.4/s) and retry like a person would, so ramp-up is paced by that limit.
-  This is real behaviour of your server, not a flaw in the test.
+* **Logins are throttled by the CRM itself**: `throttle:login` allows 5 attempts a minute per
+  email and IP (nginx adds 30 a minute per IP on the API host). Behind the admin app every
+  login reaches the API from `127.0.0.1`, so the limit is effectively per account. Twenty virtual
+  staff on one account would be refused almost every time (the first real run saw 81% of login
+  attempts answered 429). So by default people sharing the one `--email` account log in **once**
+  and reuse that session, which costs the server the same per request. For a more faithful run give each
+  person their own account with `--accounts-file` (one `email:password` per line, cycled, so 20
+  people need 20 accounts to avoid sharing); `--no-share-login` makes everyone log in anyway,
+  to test the throttle itself. A person whose login is refused retries after a pause.
 
 ## How a virtual person behaves
 
@@ -66,7 +72,7 @@ the behaviour model and the scenario format can drive any other HTTP client.
 | A visit is a handful of things | each visit runs a few weighted "journeys" (`session.journeys`) |
 | Not everyone finishes | after a step the person may leave (`continue_p`) |
 | A failed page ends the attempt | a failed or impossible step ends the journey |
-| Staff log in once, not on every click | `setup` steps run once per virtual person |
+| Staff log in once, not on every click | `setup` steps run once per virtual person (people on one shared account reuse the first login, see Safety) |
 | A new visitor's browser downloads scripts and styles; a returning one has them cached | page steps with `"assets": true` fetch `/…js` and `/…css` once, then not again; 30% of "returning" visits keep the cache |
 | Different people, different devices | each person gets a real desktop or mobile browser identity |
 | After a visit the person is gone; another arrives later | a gap (`session.gap`) then a fresh person (new cart, usually a cold cache) |

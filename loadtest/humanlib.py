@@ -159,6 +159,26 @@ def asset_paths(html, limit=12):
     return found
 
 
+# ── accounts ──────────────────────────────────────────────────────────────────
+def parse_accounts(text):
+    """Lines of "email:password" (blank lines and # comments ignored) -> [(email, password)].
+
+    The password may contain colons; only the first colon separates the two.
+    """
+    accounts = []
+    for number, raw in enumerate((text or "").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        email, sep, password = line.partition(":")
+        if not sep or not email.strip() or not password:
+            raise ScenarioError(f"accounts file line {number}: expected email:password")
+        if any(ord(c) < 32 for c in line):
+            raise ScenarioError(f"accounts file line {number}: contains control characters (paste markers?)")
+        accounts.append((email.strip(), password))
+    return accounts
+
+
 # ── scenarios ─────────────────────────────────────────────────────────────────
 def _check_think(spec, where, errors):
     if spec is None:

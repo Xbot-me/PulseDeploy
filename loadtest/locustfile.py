@@ -52,6 +52,23 @@ BASES = {k[8:].lower(): v.rstrip("/") for k, v in os.environ.items() if k.starts
 HOST_HEADERS = {k[11:].lower(): v for k, v in os.environ.items() if k.startswith("LT_HOSTHDR_") and v}
 RUN_VARS = {k[7:].lower(): v for k, v in os.environ.items() if k.startswith("LT_VAR_") and v}
 
+SHARE_LOGIN = env("LT_SHARE_LOGIN", "1") == "1"  # people on one account log in once and share the session
+
+
+def load_accounts():
+    path = env("LT_ACCOUNTS_FILE")
+    if not path:
+        return []
+    try:
+        return hl.parse_accounts(Path(path).read_text(encoding="utf-8"))
+    except (OSError, hl.ScenarioError) as exc:
+        sys.exit(f"LT_ACCOUNTS_FILE: {exc}")
+
+
+ACCOUNTS = load_accounts()  # one account per virtual person (cycled) instead of a shared one
+_ACCOUNT_INDEX = count()
+_SHARED_LOGIN = {"lock": Semaphore(), "state": {}}
+
 SHARED = {}  # lists discovered once per run, for {any:name}
 _DISCOVERY = {"lock": Semaphore(), "done": set()}
 _USER_INDEX = count(1)
@@ -186,17 +203,44 @@ class HumanUser(HttpUser):
             gevent.sleep(self.rng.uniform(0.01, 0.08))
 
     # -- setup, discovery, journeys, visits ------------------------------------
+    def run_with_retry(self, step, label="[setup] "):
+        """A person whose request is refused or fails just tries again a little later."""
+        for attempt in range(8):
+            outcome = self.run_step(step, label)
+            if outcome != "failed":
+                return outcome
+            gevent.sleep(self.rng.uniform(2, 6) * (attempt + 1) * TIME_SCALE)
+        return "failed"
+
+    def shared_login(self, step):
+        """Everyone on the same account reuses the first person's session.
+
+        The server does the same work for each request either way; this only avoids
+        hammering the login route, which the CRM throttles per account (5 a minute)."""
+        key = self.scenario["name"]
+        with _SHARED_LOGIN["lock"]:
+            state = _SHARED_LOGIN["state"].get(key)
+            if state is None:
+                outcome = self.run_with_retry(step)
+                if outcome == "ok":
+                    _SHARED_LOGIN["state"][key] = {
+                        "cookies": self.client.cookies.get_dict(),
+                        "vars": {k: self.vars[k] for k in step.get("extract", {}) if k in self.vars},
+                    }
+                return outcome
+        self.client.cookies.update(state["cookies"])
+        self.vars.update(state["vars"])
+        return "ok"
+
     def setup_login(self):
-        steps = self.scenario.get("setup", [])
-        for step in steps:
-            for attempt in range(8):
-                outcome = self.run_step(step, "[setup] ")
-                if outcome != "failed":
-                    break
-                gevent.sleep(self.rng.uniform(2, 6) * (attempt + 1) * TIME_SCALE)  # rate-limited or busy: a person just retries
+        if ACCOUNTS:
+            self.vars["email"], self.vars["password"] = ACCOUNTS[next(_ACCOUNT_INDEX) % len(ACCOUNTS)]
+        for step in self.scenario.get("setup", []):
+            if step.get("login") and SHARE_LOGIN and not ACCOUNTS:
+                outcome = self.shared_login(step)
             else:
-                return False
-            if outcome == "skipped":
+                outcome = self.run_with_retry(step)
+            if outcome != "ok":
                 return False
         return True
 
