@@ -101,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --no-venv) NO_VENV=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     -h | --help) usage; exit 0 ;;
+    ... | …) error "'...' in the documentation stands for your target options: write them out, for example --ip 172.20.119.56 --domain crm.test --email admin@crm.test --password-file ~/lt-password" ;;
     *) error "Unknown option: $1 (see --help)" ;;
   esac
 done
@@ -149,17 +150,24 @@ if [[ "$PEAK" -gt 200 && "$ALLOW_LARGE" -eq 0 ]]; then
 fi
 
 # ── scenarios must be valid, and every host they use needs a base URL ─────────
-PYTHON="${PYTHON:-python3}"
-command -v "$PYTHON" >/dev/null || error "python3 is required"
-"$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 9))' || error "Python 3.9 or newer is required"
+# python3 on Linux/macOS, python on Windows (where "python3" is often a Microsoft Store stub that
+# fails when run), or the "py" launcher: take the first one that really runs and is 3.9 or newer.
+declare -a PY=()
+for candidate in "${PYTHON:-}" python3 python py; do
+  if [[ -z "$candidate" ]] || ! command -v "$candidate" >/dev/null 2>&1; then continue; fi
+  probe=("$candidate"); [[ "$candidate" != "py" ]] || probe=(py -3)
+  if "${probe[@]}" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then PY=("${probe[@]}"); break; fi
+done
+[[ ${#PY[@]} -gt 0 ]] || error "Python 3.9 or newer was not found (tried python3, python, py). Install it from python.org and make sure it is on PATH."
 declare -a FILES=()
 IFS=',' read -ra ITEMS <<<"$SCENARIO"
 for item in "${ITEMS[@]}"; do
   name="${item%%:*}"
   if [[ -f "$name" ]]; then FILES+=("$name"); else FILES+=("$HERE/scenarios/$name.json"); fi
 done
-CHECK_OUT="$("$PYTHON" "$HERE/humanlib.py" "${FILES[@]}")" || error "Scenario problem:
+CHECK_OUT="$("${PY[@]}" "$HERE/humanlib.py" "${FILES[@]}")" || error "Scenario problem:
 $CHECK_OUT"
+CHECK_OUT="${CHECK_OUT//$'\r'/}" # Windows Python ends lines with CRLF
 for host in $(grep -oE 'hosts=[A-Za-z0-9_,]+' <<<"$CHECK_OUT" | cut -d= -f2 | tr ',' '\n' | sort -u); do
   found=0
   for b in "${BASES[@]}"; do [[ "${b%%=*}" == "$host" ]] && found=1; done
@@ -200,12 +208,13 @@ if [[ "$NO_VENV" -eq 1 ]]; then
   LOCUST="$(command -v locust)" || error "locust is not on PATH"
 else
   VENV="${LT_VENV:-$HERE/.venv}"
-  if [[ ! -x "$VENV/bin/locust" ]]; then
+  case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) VBIN="$VENV/Scripts"; EXE=".exe" ;; *) VBIN="$VENV/bin"; EXE="" ;; esac
+  if [[ ! -x "$VBIN/locust$EXE" ]]; then
     info "Setting up the load-test environment in $VENV (once) ..."
-    "$PYTHON" -m venv "$VENV" || error "Could not create a virtual environment (install python3-venv?)"
-    "$VENV/bin/pip" install -q -r "$HERE/requirements.txt" || error "pip could not install the load-test requirements"
+    "${PY[@]}" -m venv "$VENV" || error "Could not create a virtual environment (on Debian/Ubuntu: install python3-venv)"
+    "$VBIN/python$EXE" -m pip install -q -r "$HERE/requirements.txt" || error "pip could not install the load-test requirements"
   fi
-  LOCUST="$VENV/bin/locust"
+  LOCUST="$VBIN/locust$EXE"
 fi
 
 mkdir -p "$OUT"
