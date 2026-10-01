@@ -148,6 +148,42 @@ unless `--writes`). In strings: `{name}` is a value of the person or the run (`-
 `--store`, `--email`), `{name?}` is optional (an empty header is dropped) and `{any:list}` picks a
 random element. Check a file without sending anything: `bash loadtest/run.sh --check ...`.
 
+## Realistic test data
+
+An empty store makes every endpoint look fast. `loadtest/seed/seed.sh` fills a **separate test store**
+with a catalogue, customers and orders shaped like a real shop: popular products, repeat customers,
+more recent orders than old ones, the CRM's own order statuses, payment methods and districts.
+Run it on the server:
+
+```bash
+sudo bash loadtest/seed/seed.sh --store loadtest --create-store          # 5,000 products, 20,000 customers, 100,000 orders
+sudo bash loadtest/seed/seed.sh --store loadtest --purge --yes           # remove exactly what it added
+sudo bash loadtest/seed/seed.sh --store loadtest --orders 30000 --dry-run  # plan and disk estimate only
+```
+
+`--create-store` makes the store through the CRM's own `store:create` and saves the admin login in
+`/root/loadtest-store-credentials.txt` (mode 600). Then point the load test at it with
+`--store loadtest --email lt@loadtest.test` (the password is in that file).
+
+Safety: it refuses the live store from `/etc/pulsedeploy/crm.conf`, refuses any store that holds products,
+orders or customers it did not create, checks free disk first, and asks you to type the store name. Everything
+it adds is marked (`LT-` SKUs and order numbers, `lt-` slugs, `lt...@loadtest.example` e-mails) so `--purge` removes exactly that.
+The same `--seed` gives the same data. 100,000 orders load in about 10 seconds and take roughly 110 MB.
+
+### What it showed on the CRM (MariaDB 10.11, one core, measured once, your numbers will differ)
+
+| Orders in the store | `GET /admin/orders` | `GET /admin/dashboard` |
+|---|---|---|
+| 2,000 | 0.35 s | 0.58 s |
+| 10,000 | 1.5 s | 2.5 s |
+| 30,000 | 8.6 s | 8.0 s |
+| 100,000 | times out (30 s PHP limit) | times out |
+
+The cause is in the application, not the server: `OrderController::index` runs `(clone $query)->get()` to
+build its summary, which loads **every** order with its lines and payments into PHP before paginating. Tuning
+PHP, MySQL or Redis does not fix that; the summary needs SQL aggregates. Check this with a seeded store
+before trusting a result from an empty one.
+
 ## What this does not tell you
 
 * **It is server-side load, not a browser.** Pages are fetched but JavaScript is not run, so
@@ -157,7 +193,7 @@ random element. Check a file without sending anything: `bash loadtest/run.sh --c
 * **One source address.** Real users come from many addresses. Per-IP limits (the login throttle,
   fail2ban, a firewall) see this test as one visitor. Network-level floods cannot be simulated from one
   machine, and this is not a denial-of-service tool.
-* **An empty database is always fast.** Load realistic data first (thousands of products and orders).
+* **An empty database is always fast.** Load realistic data first (see "Realistic test data" below).
 * **Fixed number of people.** Virtual users are a closed population (each waits for its own
   responses), a good model for staff and for shoppers on a healthy site; during an overload real arrivals
   keep coming, which `spike` and `breakpoint` approximate but do not copy exactly.
