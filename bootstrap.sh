@@ -60,6 +60,15 @@ TIMEZONE="${PULSE_TIMEZONE:-}"
 HOSTNAME_VAL="${PULSE_HOSTNAME:-}"
 DISABLE_ROOT_SSH="${PULSE_DISABLE_ROOT_SSH:-0}"
 NON_INTERACTIVE="${PULSE_NON_INTERACTIVE:-0}"
+API_HOST="${PULSE_API_HOST:-}"
+ADMIN_HOST="${PULSE_ADMIN_HOST:-}"
+SHOP_HOST="${PULSE_SHOP_HOST:-}"
+APP_USER="${PULSE_APP_USER:-deploy}"
+CLOUDFLARE="${PULSE_CLOUDFLARE:-0}"
+TENANT_DB_PREFIX="${PULSE_TENANT_DB_PREFIX:-}"
+SERVE_STORAGE="${PULSE_SERVE_STORAGE:-0}"
+NO_QUEUE="${PULSE_NO_QUEUE:-0}"
+NO_SCHEDULER="${PULSE_NO_SCHEDULER:-0}"
 OPEN_PORTS="${PULSE_OPEN_PORTS:-}"
 REDIS_CONN="${PULSE_REDIS_CONN:-}"
 
@@ -111,7 +120,7 @@ ${BOLD}DESCRIPTION${RESET}
   written --flag value or --flag=value. Unknown flags are an error.
 
 ${BOLD}STACK OPTIONS${RESET}
-  -s, --stack <stack>       Stack to install: lemp | lamp | node | none
+  -s, --stack <stack>       Stack to install: lemp | lamp | node | laravel-next | none
                             Env: PULSE_STACK
   -P, --php <version>       PHP version: 8.1 | 8.2 | 8.3 | 8.4  (default: 8.2)
                             Env: PULSE_PHP
@@ -146,6 +155,25 @@ ${BOLD}SERVER CONFIGURATION${RESET}
       --app-port <port>     Node.js app port for Nginx proxy (default: 3000)
                             Env: PULSE_APP_PORT
 
+${BOLD}LARAVEL + NEXT.JS STACK${RESET} (--stack laravel-next; requires --domain)
+      --api-host <host>     Laravel API host    (default: api.<domain>)
+      --admin-host <host>   Next.js admin host  (default: admin.<domain>)
+      --shop-host <host>    Next.js storefront  (default: <domain>)
+      --app-user <name>     Deploy/runtime user (default: deploy)
+      --cloudflare          Restore real client IPs behind Cloudflare
+      --tenant-db-prefix <p> Multi-tenant apps that create one database per store:
+                            let the DB user create/manage databases named <p>*
+                            (for example zymerce_tenant_)
+      --serve-storage       Serve /storage/* on the Next.js hosts straight from the
+                            Laravel public disk (skips Node for uploaded files)
+      --no-queue            Do not run a queue worker (app has no queued jobs)
+      --no-scheduler        Do not run the Laravel scheduler timer
+                            The Next.js apps reach the API without leaving the
+                            machine at http://127.0.0.1:8081 (loopback only).
+                            Env: PULSE_API_HOST, PULSE_ADMIN_HOST, PULSE_SHOP_HOST,
+                            PULSE_APP_USER, PULSE_CLOUDFLARE=1, PULSE_TENANT_DB_PREFIX,
+                            PULSE_SERVE_STORAGE=1, PULSE_NO_QUEUE=1, PULSE_NO_SCHEDULER=1
+
 ${BOLD}DATABASE${RESET}
       --db-name <name>      Create a database with this name (LEMP/LAMP)
                             Env: PULSE_DB_NAME
@@ -176,6 +204,10 @@ ${BOLD}EXAMPLES${RESET}
     --db-name myapp --db-user myuser \\
     --hostname web01 --timezone Asia/Dhaka \\
     --disable-root-ssh --non-interactive
+
+  # Laravel API + Next.js admin + storefront on one small server
+  sudo bash bootstrap.sh -s laravel-next --domain example.com --email me@example.com \\
+    --services certbot --cloudflare -y
 
   # Node.js server, non-interactive
   sudo bash bootstrap.sh -s node -N 22 -S firewall,swap,docker -y
@@ -225,6 +257,15 @@ parse_args() {
          --ssh-port)         need_value "$@"; SSH_PORT="$2";                       shift 2 ;;
          --disable-root-ssh) DISABLE_ROOT_SSH=1;                                   shift   ;;
          --app-port)         need_value "$@"; APP_PORT="$2"; PORT_SET=1;           shift 2 ;;
+         --api-host)         need_value "$@"; API_HOST="$2";                       shift 2 ;;
+         --admin-host)       need_value "$@"; ADMIN_HOST="$2";                     shift 2 ;;
+         --shop-host)        need_value "$@"; SHOP_HOST="$2";                      shift 2 ;;
+         --app-user)         need_value "$@"; APP_USER="$2";                       shift 2 ;;
+         --cloudflare)       CLOUDFLARE=1;                                         shift   ;;
+         --tenant-db-prefix) need_value "$@"; TENANT_DB_PREFIX="$2";               shift 2 ;;
+         --serve-storage)    SERVE_STORAGE=1;                                      shift   ;;
+         --no-queue)         NO_QUEUE=1;                                           shift   ;;
+         --no-scheduler)     NO_SCHEDULER=1;                                       shift   ;;
          --db-name)          need_value "$@"; DB_NAME="$2";                        shift 2 ;;
          --db-user)          need_value "$@"; DB_USER="$2";                        shift 2 ;;
          --swap-size)        need_value "$@"; SWAP_SIZE="$2"; SWAP_SET=1;          shift 2 ;;
@@ -242,12 +283,17 @@ parse_args() {
   SWAP_SIZE="${SWAP_SIZE^^}"
   case "${DISABLE_ROOT_SSH,,}" in 1|true|yes) DISABLE_ROOT_SSH=1 ;; *) DISABLE_ROOT_SSH=0 ;; esac
   case "${NON_INTERACTIVE,,}" in 1|true|yes) NON_INTERACTIVE=1 ;; *) NON_INTERACTIVE=0 ;; esac
+  case "${CLOUDFLARE,,}" in 1|true|yes) CLOUDFLARE=1 ;; *) CLOUDFLARE=0 ;; esac
+  case "${SERVE_STORAGE,,}" in 1|true|yes) SERVE_STORAGE=1 ;; *) SERVE_STORAGE=0 ;; esac
+  case "${NO_QUEUE,,}" in 1|true|yes) NO_QUEUE=1 ;; *) NO_QUEUE=0 ;; esac
+  case "${NO_SCHEDULER,,}" in 1|true|yes) NO_SCHEDULER=1 ;; *) NO_SCHEDULER=0 ;; esac
   return 0
 }
 
 # ── Validation ────────────────────────────────────────────────────────────────
 valid_php_ver()    { [[ "$1" =~ ^8\.[1-4]$ ]]; }
 valid_node_ver()   { [[ "$1" =~ ^(18|20|22|24)$ ]]; }
+valid_tenant_prefix() { [[ "$1" =~ ^[A-Za-z0-9_]{2,40}$ ]]; }
 valid_redis_conn() { [[ "$1" == "socket" || "$1" == "tcp" ]]; }
 valid_port_list() {
   local p
@@ -263,7 +309,7 @@ valid_port_list() {
 
 # Fail fast on bad flags/env before touching the system.
 validate_inputs() {
-  case "$STACK" in lemp|lamp|node|none|"") ;; *) error "Invalid --stack '$STACK' (lemp | lamp | node | none)" ;; esac
+  case "$STACK" in lemp|lamp|node|laravel-next|none|"") ;; *) error "Invalid --stack '$STACK' (lemp | lamp | node | laravel-next | none)" ;; esac
   valid_php_ver "$PHP_VER"       || error "Invalid --php '$PHP_VER' (8.1 | 8.2 | 8.3 | 8.4)"
   valid_node_ver "$NODE_VER"     || error "Invalid --node '$NODE_VER' (18 | 20 | 22 | 24)"
   valid_port "$APP_PORT"         || error "Invalid --app-port '$APP_PORT' (1-65535)"
@@ -271,6 +317,10 @@ validate_inputs() {
   valid_port_list "$OPEN_PORTS"  || error "Invalid --open-ports '$OPEN_PORTS' (comma-separated ports, 1-65535)"
   [[ -z "$DOMAIN" ]]       || valid_domain "$DOMAIN"       || error "Invalid --domain '$DOMAIN'"
   [[ -z "$EMAIL" ]]        || valid_email "$EMAIL"         || error "Invalid --email '$EMAIL'"
+  [[ -z "$API_HOST" ]]     || valid_domain "$API_HOST"     || error "Invalid --api-host '$API_HOST'"
+  [[ -z "$ADMIN_HOST" ]]   || valid_domain "$ADMIN_HOST"   || error "Invalid --admin-host '$ADMIN_HOST'"
+  [[ -z "$SHOP_HOST" ]]    || valid_domain "$SHOP_HOST"    || error "Invalid --shop-host '$SHOP_HOST'"
+  [[ "$APP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$APP_USER" != "root" ]] || error "Invalid --app-user '$APP_USER' (lowercase letters, digits, - and _; not root)"
   [[ -z "$HOSTNAME_VAL" ]] || valid_hostname "$HOSTNAME_VAL" || error "Invalid --hostname '$HOSTNAME_VAL'"
   [[ -z "$TIMEZONE" ]]     || valid_timezone "$TIMEZONE"   || error "Unknown --timezone '$TIMEZONE' (see: timedatectl list-timezones)"
   [[ -z "$SWAP_SIZE" ]]    || valid_swap_size "$SWAP_SIZE" || error "Invalid --swap-size '$SWAP_SIZE' (examples: 512M, 2G)"
@@ -278,6 +328,7 @@ validate_inputs() {
   [[ -z "$DB_USER" ]]      || valid_db_user "$DB_USER"     || error "Invalid --db-user '$DB_USER' (letters, digits, underscore; max 32)"
   [[ -z "$REDIS_CONN" ]]   || valid_redis_conn "$REDIS_CONN" || error "Invalid --redis-conn '$REDIS_CONN' (socket | tcp)"
   [[ -z "$DB_USER" || -n "$DB_NAME" ]] || error "--db-user requires --db-name"
+  [[ -z "$TENANT_DB_PREFIX" ]] || valid_tenant_prefix "$TENANT_DB_PREFIX" || error "Invalid --tenant-db-prefix '$TENANT_DB_PREFIX' (letters, digits, underscore; 2-40 characters)"
   return 0
 }
 
@@ -523,17 +574,19 @@ select_stack() {
   echo -e "  ${BOLD}2)${RESET} LAMP  - Apache + PHP + MySQL"
   echo -e "  ${BOLD}3)${RESET} Node  - Nginx + Node.js (with PM2)"
   echo -e "  ${BOLD}4)${RESET} Skip  - Core services only"
+  echo -e "  ${BOLD}5)${RESET} Laravel + Next.js - API, admin dashboard and storefront on one server"
   echo ""
   local choice=""
   while [[ -z "$STACK" ]]; do
-    read -rp "$(echo -e "${CYAN}Enter choice [1-4]:${RESET} ")" choice ||
+    read -rp "$(echo -e "${CYAN}Enter choice [1-5]:${RESET} ")" choice ||
       error "Input closed - re-run with --non-interactive and flags."
     case "$choice" in
       1) STACK="lemp" ;;
       2) STACK="lamp" ;;
       3) STACK="node" ;;
       4) STACK="none" ;;
-      *) warn "Please enter 1, 2, 3 or 4." ;;
+      5) STACK="laravel-next" ;;
+      *) warn "Please enter 1, 2, 3, 4 or 5." ;;
     esac
   done
   log "Stack selected: $STACK"
@@ -545,6 +598,9 @@ select_versions() {
   [[ "$NON_INTERACTIVE" -eq 1 ]] && return 0
   if [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && [[ "$PHP_SET" -eq 0 ]]; then
     prompt PHP_VER "PHP version (8.1 / 8.2 / 8.3 / 8.4)" "$PHP_VER" valid_php_ver
+  fi
+  if [[ "$STACK" == "laravel-next" && -z "$DOMAIN" ]]; then
+    prompt DOMAIN "Main domain (for example example.com)" "" valid_domain
   fi
   if [[ "$STACK" == "node" ]]; then
     [[ "$NODE_SET" -eq 0 ]] && prompt NODE_VER "Node.js version (18 / 20 / 22 / 24)" "$NODE_VER" valid_node_ver
@@ -594,10 +650,29 @@ select_service_options() {
 check_consistency() {
   REDIS_CONN="${REDIS_CONN:-socket}"
   local web=0
-  [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && web=1
-  if [[ "${SERVICES[phptune]}" -eq 1 && "$web" -eq 0 ]]; then
+  [[ "$STACK" == "lemp" || "$STACK" == "lamp" || "$STACK" == "laravel-next" ]] && web=1
+  if [[ "$STACK" == "laravel-next" ]]; then
+    [[ -n "$DOMAIN" ]] || error "--stack laravel-next needs --domain"
+    # Redis, PHP tuning and DB tuning are built into this stack.
+    SERVICES[redis]=0
+    SERVICES[phptune]=0
+    # Safe defaults for a production box; harmless if already chosen.
+    if [[ "${SERVICES[firewall]}" -eq 0 ]]; then
+      SERVICES[firewall]=1
+      info "Firewall + fail2ban enabled by default for this stack"
+    fi
+    if [[ "${SERVICES[swap]}" -eq 0 ]] && (($(total_ram_mb) <= 4096)); then
+      SERVICES[swap]=1
+      info "Swap enabled by default (server has 4GB RAM or less)"
+    fi
+  fi
+  if [[ "${SERVICES[phptune]}" -eq 1 && "$STACK" != "lemp" && "$STACK" != "lamp" ]]; then
     warn "phptune needs the lemp or lamp stack - it will be skipped."
     SERVICES[phptune]=0
+  fi
+  if [[ -n "$TENANT_DB_PREFIX" && "$web" -eq 0 ]]; then
+    warn "--tenant-db-prefix only applies to web stacks with a database - ignored."
+    TENANT_DB_PREFIX=""
   fi
   if [[ -n "$DB_NAME" && "$web" -eq 0 ]]; then
     warn "--db-name/--db-user only apply to lemp/lamp stacks - ignored."
@@ -627,6 +702,14 @@ confirm_install() {
   [[ "$STACK" == "lemp" || "$STACK" == "lamp" ]] && echo -e "  PHP version      : ${BOLD}$PHP_VER${RESET}"
   [[ "$STACK" == "node" ]] && echo -e "  Node version     : ${BOLD}$NODE_VER${RESET} (app port ${APP_PORT})"
   echo -e "  Domain           : ${BOLD}${DOMAIN:-not set}${RESET}"
+  if [[ "$STACK" == "laravel-next" ]]; then
+    echo -e "  API host         : ${BOLD}${API_HOST:-api.$DOMAIN}${RESET}"
+    echo -e "  Admin host       : ${BOLD}${ADMIN_HOST:-admin.$DOMAIN}${RESET}"
+    echo -e "  Storefront host  : ${BOLD}${SHOP_HOST:-$DOMAIN}${RESET}"
+    echo -e "  Deploy user      : ${BOLD}${APP_USER}${RESET}   Cloudflare: ${BOLD}$(yes_no "$CLOUDFLARE")${RESET}"
+    echo -e "  Tenant DB prefix : ${BOLD}${TENANT_DB_PREFIX:-none}${RESET}   Serve /storage: ${BOLD}$(yes_no "$SERVE_STORAGE")${RESET}"
+    echo -e "  Queue worker     : ${BOLD}$(yes_no $((1 - NO_QUEUE)))${RESET}   Scheduler: ${BOLD}$(yes_no $((1 - NO_SCHEDULER)))${RESET}"
+  fi
   echo -e "  Email            : ${BOLD}${EMAIL:-not set}${RESET}"
   echo -e "  Hostname         : ${BOLD}${HOSTNAME_VAL:-not set}${RESET}"
   echo -e "  Timezone         : ${BOLD}${TIMEZONE:-not set}${RESET}"
@@ -662,7 +745,7 @@ preflight_stack() {
   # shellcheck source=scripts/lib/web.sh
   source "$SCRIPT_DIR/scripts/lib/web.sh"
   case "$STACK" in
-    lemp|node) require_port_free 80 "nginx" ;;
+    lemp|node|laravel-next) require_port_free 80 "nginx" ;;
     lamp)      require_port_free 80 "apache2|httpd" ;;
   esac
   return 0
@@ -690,6 +773,7 @@ run_install() {
     lemp) source "$SCRIPT_DIR/scripts/stacks/lemp.sh"; install_lemp ;;
     lamp) source "$SCRIPT_DIR/scripts/stacks/lamp.sh"; install_lamp ;;
     node) source "$SCRIPT_DIR/scripts/stacks/node.sh"; install_node ;;
+    laravel-next) source "$SCRIPT_DIR/scripts/stacks/laravel_next.sh"; install_laravel_next ;;
     none) info "Skipping stack installation." ;;
   esac
 
@@ -716,7 +800,7 @@ print_summary() {
   echo -e "║          PULSEDEPLOY COMPLETE  ⚡            ║"
   echo -e "╚══════════════════════════════════════════════╝${RESET}"
   case "$STACK" in
-    lemp|lamp|node) echo -e "  ${CYAN}Server    :${RESET} http://${ip}/" ;;
+    lemp|lamp|node|laravel-next) echo -e "  ${CYAN}Server    :${RESET} http://${ip}/" ;;
   esac
   [[ -n "$DOMAIN" && "$STACK" != "none" ]] && echo -e "  ${CYAN}Domain    :${RESET} ${DOMAIN}"
   [[ -n "$DB_NAME" ]] && echo -e "  ${CYAN}Database  :${RESET} $DB_NAME (credentials in /root/.my.cnf)"

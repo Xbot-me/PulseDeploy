@@ -1,0 +1,30 @@
+# Build the Laravel API in CI and deploy it with `pulse`.
+# Secrets: DEPLOY_HOST, DEPLOY_SSH_KEY (private key allowed for the deploy user)
+name: Deploy API
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - run: composer install --no-dev --optimize-autoloader --no-interaction
+      # Uncomment when Vite builds front-end assets into public/build
+      # - uses: actions/setup-node@v4
+      #   with: { node-version: 22 }
+      # - run: npm ci && npm run build
+      - name: Package
+        run: tar --exclude=.git --exclude=node_modules --exclude=tests --exclude=.env -czf api.tar.gz .
+      - name: Ship and deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 600 /dev/null key && printf '%s\n' "$KEY" > key
+          SSH="ssh -i key -o StrictHostKeyChecking=accept-new deploy@$HOST"
+          scp -i key -o StrictHostKeyChecking=accept-new api.tar.gz "deploy@$HOST:/tmp/api.tar.gz"
+          $SSH "pulse deploy api --artifact /tmp/api.tar.gz; status=\$?; rm -f /tmp/api.tar.gz; exit \$status"

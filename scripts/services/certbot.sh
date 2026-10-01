@@ -61,13 +61,16 @@ HOOK
 # Try to issue a certificate when --domain and --email were given. DNS may not
 # point here yet, so failure is a warning, never fatal.
 _certbot_issue() {
-  [[ -n "${DOMAIN:-}" ]] || return 0
+  # CERT_DOMAINS (space separated) wins over the single DOMAIN
+  local -a names
+  read -ra names <<<"${CERT_DOMAINS:-${DOMAIN:-}}"
+  ((${#names[@]})) || return 0
   if [[ -z "${EMAIL:-}" ]]; then
     warn "Certificate not requested: --email is required together with --domain."
     return 0
   fi
-  local plugin=""
-  if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/pulsedeploy.conf ]]; then
+  local plugin="" d
+  if command -v nginx &>/dev/null && compgen -G '/etc/nginx/conf.d/pulsedeploy*.conf' >/dev/null; then
     plugin="--nginx"
   elif command -v apache2ctl &>/dev/null || command -v httpd &>/dev/null; then
     plugin="--apache"
@@ -75,13 +78,15 @@ _certbot_issue() {
     info "No web server configured by PulseDeploy - skipping automatic certificate."
     return 0
   fi
-  info "Requesting a certificate for ${DOMAIN} ..."
-  if certbot "$plugin" -d "$DOMAIN" --non-interactive --agree-tos --no-eff-email \
+  local -a args=()
+  for d in "${names[@]}"; do args+=(-d "$d"); done
+  info "Requesting a certificate for ${names[*]} ..."
+  if certbot "$plugin" "${args[@]}" --non-interactive --agree-tos --no-eff-email \
       -m "$EMAIL" --redirect; then
-    log "HTTPS enabled for https://${DOMAIN}"
+    log "HTTPS enabled for ${names[*]}"
   else
-    warn "Certificate request failed (is the DNS A record for ${DOMAIN} pointing to this server, and port 80 open?)."
-    warn "Fix that, then run: certbot ${plugin} -d ${DOMAIN}"
+    warn "Certificate request failed (do the DNS A records for ${names[*]} point to this server, and is port 80 open?)."
+    warn "Fix that, then run: certbot ${plugin} ${args[*]}"
   fi
   return 0
 }

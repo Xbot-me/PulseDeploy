@@ -30,6 +30,12 @@ install_mysql() {
     amzn)             candidates=(mariadb1011-server mariadb105-server mariadb-server mysql-server) ;;
     *)                candidates=(mysql-server mariadb-server) ;;
   esac
+  # Versioned MariaDB packages conflict with each other: keep one that is already installed.
+  if [[ "$OS_ID" == "amzn" ]]; then
+    local have=""
+    have="$(rpm -qa --qf '%{NAME}\n' 2>/dev/null | grep -E '^mariadb[0-9]*-server$' | head -n 1)" || have=""
+    if [[ -n "$have" ]]; then candidates=("$have"); fi
+  fi
   pkg_install_first "${candidates[@]}" ||
     error "Could not install a database server (tried: ${candidates[*]})."
   log "Installed database package: $PKG_INSTALLED"
@@ -130,6 +136,27 @@ SQL
   return 0
 }
 
+# mysql_saved_password <user> - password saved for that user in /root/.my.cnf
+mysql_saved_password() {
+  awk -v sec="[client_$1]" '
+    $0 == sec { f = 1; next }
+    /^\[/ { f = 0 }
+    f && /^password=/ { v = substr($0, 10); gsub(/^"|"$/, "", v); print v; exit }
+  ' "$MYSQL_CLIENT_CNF" 2>/dev/null || true
+}
+
+# For apps that create one database per tenant with their own DB user: allow
+# that user everything on databases named <prefix>*. "_" is a wildcard in grant
+# patterns, so it is escaped to match literally.
+mysql_grant_tenant_prefix() {
+  local user="$1" prefix="${TENANT_DB_PREFIX:-}"
+  [[ -n "$prefix" ]] || return 0
+  [[ "$prefix" =~ ^[A-Za-z0-9_]{2,40}$ ]] || error "Invalid tenant database prefix '$prefix'."
+  local pattern="${prefix//_/\\_}%"
+  mysql -e "GRANT ALL PRIVILEGES ON \`${pattern}\`.* TO '${user}'@'localhost'; FLUSH PRIVILEGES;"
+  log "Database user ${user} may create and manage databases named ${prefix}*"
+}
+
 # Create DB_NAME and (optionally) DB_USER with a random password.
 create_database() {
   [[ -z "${DB_NAME:-}" && -z "${DB_USER:-}" ]] && return 0
@@ -155,6 +182,7 @@ create_database() {
   if [[ "$exists" != "0" ]]; then
     warn "Database user '${DB_USER}'@'localhost' already exists - password left unchanged."
     mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost'; FLUSH PRIVILEGES;"
+    mysql_grant_tenant_prefix "$DB_USER"
     return 0
   fi
 
@@ -171,5 +199,6 @@ SQL
       "$DB_USER" "$DB_USER" "$pass" "$DB_NAME" >>"$MYSQL_CLIENT_CNF"
   )
   log "Database user created: $DB_USER - credentials in $MYSQL_CLIENT_CNF (group [client_${DB_USER}])"
+  mysql_grant_tenant_prefix "$DB_USER"
   return 0
 }

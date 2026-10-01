@@ -1,0 +1,19 @@
+# Managed by PulseDeploy - sized for a server that also runs PHP, Node and Redis
+[mysqld]
+character-set-server = utf8mb4
+collation-server     = utf8mb4_unicode_ci
+skip-name-resolve
+# Only the local PHP app talks to this server (over the socket or loopback)
+bind-address         = 127.0.0.1
+performance_schema   = OFF
+max_connections      = @MAXCONN@
+innodb_buffer_pool_size = @BP@M
+innodb_flush_method  = O_DIRECT
+tmp_table_size       = @TMP@M
+max_heap_table_size  = @TMP@M
+table_open_cache     = @TABLE_CACHE@
+table_definition_cache = @TABLE_DEF@
+thread_cache_size    = 16
+slow_query_log       = 1
+long_query_time      = 1
+@BINLOG@

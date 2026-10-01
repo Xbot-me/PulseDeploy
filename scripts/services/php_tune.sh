@@ -3,6 +3,43 @@
 # shellcheck source=scripts/lib/web.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 
+# php_write_ini_dropin <opcache_mb> <array-name-for-written-paths>
+# Writes 99-pulsedeploy.ini into every PHP conf.d directory. Behaviour knobs:
+#   PHP_OPCACHE_VALIDATE (default 1)  0 = never stat files; reload FPM on deploy
+#   PHP_JIT (default tracing)         "off" disables the JIT (less RAM, no gain for I/O-bound apps)
+php_write_ini_dropin() {
+  local opcache_mem="$1"
+  local -n _written="$2"
+  local validate="${PHP_OPCACHE_VALIDATE:-1}" jit="${PHP_JIT:-tracing}" jit_buf="64M" d
+  local files="${PHP_OPCACHE_FILES:-10000}"
+  [[ "$jit" == "off" ]] && jit_buf="0"
+  _written=()
+  for d in "${PHP_INI_DIRS[@]}"; do
+    cat >"$d/99-pulsedeploy.ini" <<INI
+; Managed by PulseDeploy - remove this file to undo
+expose_php = Off
+memory_limit = 256M
+upload_max_filesize = 64M
+post_max_size = 64M
+max_execution_time = ${PHP_MAX_EXECUTION:-300}
+realpath_cache_size = 4096K
+realpath_cache_ttl = 600
+
+opcache.enable = 1
+opcache.enable_cli = 0
+opcache.memory_consumption = ${opcache_mem}
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = ${files}
+opcache.validate_timestamps = ${validate}
+opcache.revalidate_freq = 60
+opcache.jit_buffer_size = ${jit_buf}
+opcache.jit = ${jit}
+INI
+    _written+=("$d/99-pulsedeploy.ini")
+  done
+  return 0
+}
+
 tune_php_fpm() {
   section "PHP Performance Tuning"
 
@@ -59,29 +96,9 @@ tune_php_fpm() {
   ((opcache_mem > 256)) && opcache_mem=256
 
   local -a written=()
-  local d
-  for d in "${PHP_INI_DIRS[@]}"; do
-    cat >"$d/99-pulsedeploy.ini" <<INI
-; Managed by PulseDeploy - remove this file to undo
-expose_php = Off
-memory_limit = 256M
-upload_max_filesize = 64M
-post_max_size = 64M
-max_execution_time = 300
-
-opcache.enable = 1
-opcache.enable_cli = 0
-opcache.memory_consumption = ${opcache_mem}
-opcache.interned_strings_buffer = 16
-opcache.max_accelerated_files = 10000
-opcache.revalidate_freq = 60
-opcache.jit_buffer_size = 64M
-opcache.jit = tracing
-INI
-    written+=("$d/99-pulsedeploy.ini")
-  done
+  php_write_ini_dropin "$opcache_mem" written
   if ((${#written[@]})); then
-    log "php.ini + OPcache (${opcache_mem}MB, JIT tracing) tuned via ${written[*]}"
+    log "php.ini + OPcache (${opcache_mem}MB) tuned via ${written[*]}"
   else
     warn "No PHP conf.d directory found - php.ini/OPcache tuning skipped."
   fi

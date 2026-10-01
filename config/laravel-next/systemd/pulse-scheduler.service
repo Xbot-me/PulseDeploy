@@ -1,0 +1,11 @@
+[Unit]
+Description=Laravel scheduler (one tick)
+ConditionPathExists=/var/www/api/current/artisan
+
+[Service]
+Type=oneshot
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=/var/www/api/current
+ExecStart=@PHP_BIN@ artisan schedule:run --no-interaction
+SyslogIdentifier=pulse-scheduler

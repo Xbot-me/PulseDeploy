@@ -4,13 +4,23 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/web.sh"
 
 # _redis_ping <socket|tcp> <socket-path> - retries for ~10 s
+# The client is named after the package on Amazon Linux (redis6-cli, redis7-cli).
+_redis_cli_bin() {
+  local b
+  for b in redis-cli redis6-cli redis7-cli; do
+    if command -v "$b" &>/dev/null; then printf '%s' "$b"; return 0; fi
+  done
+  return 1
+}
+
 _redis_ping() {
-  local mode="$1" sock="$2" i reply=""
+  local mode="$1" sock="$2" i reply="" cli=""
+  cli="$(_redis_cli_bin)" || error "No redis client (redis-cli) found to verify the server."
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if [[ "$mode" == "socket" ]]; then
-      reply="$(redis-cli -s "$sock" ping 2>/dev/null || true)"
+      reply="$("$cli" -s "$sock" ping 2>/dev/null || true)"
     else
-      reply="$(redis-cli ping 2>/dev/null || true)"
+      reply="$("$cli" ping 2>/dev/null || true)"
     fi
     [[ "$reply" == "PONG" ]] && return 0
     sleep 1
@@ -37,7 +47,7 @@ install_redis() {
 
   local ram_mb redis_mem sock="/run/redis/redis.sock" conn="${REDIS_CONN:-socket}"
   ram_mb="$(total_ram_mb)"
-  redis_mem=$((ram_mb / 4)) # ~25% of RAM
+  redis_mem="${REDIS_MAXMEM_MB:-$((ram_mb / 4))}" # default ~25% of RAM
   ((redis_mem < 64)) && redis_mem=64
 
   # ── Security: loopback only ────────────────────────────────────────────────
@@ -81,6 +91,17 @@ install_redis() {
     fi
   fi
   log "Redis is running and responding to PING ✔ (${conn})"
+
+  # Redis forks to write snapshots. With vm.overcommit_memory=0 the kernel can refuse that
+  # fork on a memory-tight server, and Redis then rejects writes (sessions live here).
+  # Setting it to 1 is Redis's own recommendation.
+  if [[ "$(sysctl -n vm.overcommit_memory 2>/dev/null)" != "1" ]]; then
+    printf '# Managed by PulseDeploy - lets Redis always fork to snapshot\nvm.overcommit_memory = 1\n' \
+      >/etc/sysctl.d/99-pulsedeploy-redis.conf
+    sysctl -p /etc/sysctl.d/99-pulsedeploy-redis.conf &>/dev/null ||
+      warn "Could not apply vm.overcommit_memory=1 now (it applies on reboot)."
+    log "vm.overcommit_memory=1 (Redis recommendation)"
+  fi
 
   # PHP-FPM must be restarted to pick up the new group membership.
   php_layout

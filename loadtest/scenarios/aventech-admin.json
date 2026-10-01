@@ -1,0 +1,52 @@
+{
+  "name": "aventech-admin",
+  "description": "Back-office staff using the admin app in a browser: pages, then the API calls those pages make through the app's proxy. Read-only.",
+  "hosts": ["admin"],
+  "headers": { "admin": { "X-Store-Subdomain": "{store}" } },
+  "think": { "median": 7, "sigma": 0.7, "min": 1.0, "max": 120 },
+  "session": {
+    "journeys": { "median": 3, "sigma": 0.5, "min": 1, "max": 8 },
+    "gap": { "median": 90, "sigma": 0.8, "min": 10, "max": 900 }
+  },
+  "shared": { "search_terms": ["shirt", "bag", "shoe", "watch", "dress", "belt"] },
+  "setup": [
+    { "name": "page: login", "host": "admin", "path": "/login", "html": true, "assets": true, "think": { "median": 4, "sigma": 0.5, "max": 15 } },
+    { "name": "api: login", "login": true, "host": "admin", "method": "POST", "path": "/api/auth/login",
+      "json": { "email": "{email}", "password": "{password}" }, "expect": [200] }
+  ],
+  "discover": [
+    { "name": "list products for ids", "host": "admin", "path": "/api/proxy/products?per_page=50",
+      "extract_shared": { "product_ids": "data.data[*].id" } }
+  ],
+  "journeys": [
+    { "name": "start the day: dashboard then recent orders", "weight": 5, "steps": [
+      { "name": "page: dashboard", "host": "admin", "path": "/dashboard", "html": true, "assets": true, "think": { "median": 2, "sigma": 0.4, "max": 8 } },
+      { "name": "api: dashboard", "host": "admin", "path": "/api/proxy/dashboard", "think": { "median": 9, "sigma": 0.6, "max": 60 }, "continue_p": 0.9 },
+      { "name": "page: orders", "host": "admin", "path": "/orders", "html": true, "assets": true, "think": { "median": 1.5, "sigma": 0.4, "max": 6 } },
+      { "name": "api: orders list", "host": "admin", "path": "/api/proxy/orders?per_page=20" }
+    ] },
+    { "name": "work through orders", "weight": 6, "steps": [
+      { "name": "page: orders", "host": "admin", "path": "/orders", "html": true, "assets": true, "think": { "median": 1.5, "sigma": 0.4, "max": 6 } },
+      { "name": "api: orders list", "host": "admin", "path": "/api/proxy/orders?per_page=20",
+        "extract": { "order_id": { "path": "data.data[*].id", "pick": "random" } }, "think": { "median": 10, "sigma": 0.7, "max": 90 } },
+      { "name": "api: order detail", "host": "admin", "path": "/api/proxy/orders/{order_id}", "continue_p": 0.6, "think": { "median": 12, "sigma": 0.7, "max": 120 } },
+      { "name": "api: orders list page 2", "host": "admin", "path": "/api/proxy/orders?per_page=20&page=2", "expect": [200, 404] }
+    ] },
+    { "name": "browse the catalogue", "weight": 4, "steps": [
+      { "name": "page: products", "host": "admin", "path": "/products", "html": true, "assets": true, "think": { "median": 1.5, "sigma": 0.4, "max": 6 } },
+      { "name": "api: products list", "host": "admin", "path": "/api/proxy/products?per_page=20", "think": { "median": 5, "sigma": 0.6, "max": 40 } },
+      { "name": "api: categories tree", "host": "admin", "path": "/api/proxy/categories?tree=1", "think": { "median": 8, "sigma": 0.7, "max": 60 }, "continue_p": 0.8 },
+      { "name": "api: product detail", "host": "admin", "path": "/api/proxy/product/{any:product_ids}" }
+    ] },
+    { "name": "search for a product", "weight": 2, "steps": [
+      { "name": "page: products", "host": "admin", "path": "/products", "html": true, "assets": true, "think": { "median": 3, "sigma": 0.5, "max": 12 } },
+      { "name": "api: product search", "host": "admin", "path": "/api/proxy/products?per_page=20&search={any:search_terms}", "think": { "median": 8, "sigma": 0.7, "max": 60 }, "continue_p": 0.7 },
+      { "name": "api: product detail", "host": "admin", "path": "/api/proxy/product/{any:product_ids}" }
+    ] },
+    { "name": "check brands and categories", "weight": 1, "steps": [
+      { "name": "page: brands", "host": "admin", "path": "/brands", "html": true, "assets": true, "think": { "median": 2, "sigma": 0.4, "max": 8 } },
+      { "name": "api: brands", "host": "admin", "path": "/api/proxy/brands", "think": { "median": 6, "sigma": 0.6, "max": 40 } },
+      { "name": "api: categories", "host": "admin", "path": "/api/proxy/categories" }
+    ] }
+  ]
+}
