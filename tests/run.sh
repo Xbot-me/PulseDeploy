@@ -467,6 +467,8 @@ eq "cpu_delta with no elapsed time"    "0.0 0.0 0.0"   "$(audit cpu_delta 'cpu 1
 eq "php_budget_mb for a 4 GB server"   "1180" "$(audit php_budget_mb 3889 768 233 448 448)"
 eq "suggest_children divides the budget" "19" "$(audit suggest_children 1180 60)"
 eq "suggest_children never below 4"    "4"   "$(audit suggest_children 100 80)"
+eq "cpu_children_cap: 2 CPUs"           "12"  "$(audit cpu_children_cap 2)"
+eq "cpu_children_cap: 1 CPU"              "6"   "$(audit cpu_children_cap 1)"
 eq "suggest_children survives 0 MB"    "100" "$(audit suggest_children 100 0)"
 check_not "audit rejects requests < concurrency" bash "$ROOT/scripts/audit.sh" --requests 3 --concurrency 10
 check_not "audit rejects a relative load path"   bash "$ROOT/scripts/audit.sh" --load-path up
