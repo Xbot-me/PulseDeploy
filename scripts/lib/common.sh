@@ -239,9 +239,16 @@ svc_active()  { systemctl is-active --quiet "$1"; }
 
 # Print the first existing unit from the list (without the .service suffix).
 svc_first_existing() {
-  local s
+  local s id
   for s in "$@"; do
-    if svc_exists "$s"; then printf '%s' "$s"; return 0; fi
+    if svc_exists "$s"; then
+      # "systemctl enable" refuses alias names (mysql.service -> mariadb.service), so
+      # report the real unit. Fall back to the name given when systemd cannot say.
+      id="$(systemctl show -p Id --value "$s.service" 2>/dev/null)" || id=""
+      if [[ "$id" == *.service ]]; then s="${id%.service}"; fi
+      printf '%s' "$s"
+      return 0
+    fi
   done
   return 1
 }

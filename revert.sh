@@ -268,6 +268,10 @@ revert_redis() {
   else
     info "Redis data kept in /var/lib/redis (pass --purge-data to delete)"
   fi
+  if [[ -f /etc/sysctl.d/99-pulsedeploy-redis.conf ]]; then
+    run_or_echo rm -f /etc/sysctl.d/99-pulsedeploy-redis.conf
+    run_or_echo sysctl -w vm.overcommit_memory=0
+  fi
   if applied; then log "Redis removed"; else info "(dry-run) would remove Redis"; fi
   return 0
 }
@@ -367,8 +371,54 @@ revert_phptune() {
   return 0
 }
 
+detected_laravel_next() {
+  [[ -f /etc/pulsedeploy/pulse.conf || -x /usr/local/bin/pulse || -f /etc/systemd/system/pulse-next@.service ]]
+}
+
+# Undo the Laravel + Next.js profile: services, tooling and tuning files.
+# Application code, uploads and backups stay unless --purge-data is given.
+revert_laravel_next() {
+  detected_laravel_next || return 0
+  info "Removing the Laravel + Next.js profile"
+  local u f
+  for u in pulse-scheduler.timer pulse-scheduler.service pulse-queue.service \
+           pulse-next@shop.service pulse-next@admin.service; do
+    if systemctl cat "$u" &>/dev/null; then run_or_echo systemctl disable --now "$u"; fi
+  done
+  run_or_echo rm -rf /etc/systemd/system/pulse-next@shop.service.d /etc/systemd/system/pulse-next@admin.service.d
+  run_or_echo rm -f /etc/systemd/system/pulse-next@.service /etc/systemd/system/pulse-queue.service \
+    /etc/systemd/system/pulse-scheduler.service /etc/systemd/system/pulse-scheduler.timer
+  run_or_echo systemctl daemon-reload
+  run_or_echo rm -f /usr/local/bin/pulse /etc/sudoers.d/pulsedeploy /etc/cron.d/pulsedeploy-backup \
+    /etc/logrotate.d/pulsedeploy /etc/sysctl.d/99-pulsedeploy-app.conf \
+    /etc/systemd/journald.conf.d/pulsedeploy.conf
+  run_or_echo rm -rf /etc/pulsedeploy /etc/nginx/pulsedeploy
+  # crm.sh leftovers: build workspace, the toolkit copy and its command, git helper
+  run_or_echo rm -rf /var/lib/pulsedeploy /opt/pulsedeploy
+  run_or_echo rm -f /usr/local/bin/pulse-crm /usr/local/lib/pulsedeploy-git-askpass
+  for f in /etc/nginx/conf.d/00-pulsedeploy-http.conf /etc/nginx/conf.d/01-pulsedeploy-cloudflare.conf \
+           /etc/nginx/conf.d/pulsedeploy-api.conf /etc/nginx/conf.d/pulsedeploy-shop.conf \
+           /etc/nginx/conf.d/pulsedeploy-admin.conf /etc/nginx/conf.d/pulsedeploy-redirect.conf \
+           /etc/mysql/conf.d/zz-pulsedeploy.cnf /etc/my.cnf.d/zz-pulsedeploy.cnf; do
+    [[ -e "$f" ]] && run_or_echo rm -f "$f"
+  done
+  for f in /etc/php/*/fpm/pool.d/pulse-laravel.conf /etc/php-fpm.d/pulse-laravel.conf \
+           /etc/php/*/*/conf.d/99-pulsedeploy.ini /etc/php.d/99-pulsedeploy.ini; do
+    [[ -e "$f" ]] && run_or_echo rm -f "$f"
+  done
+  if [[ "$PURGE_DATA" -eq 1 ]]; then
+    warn "--purge-data: deleting the applications, uploads and backups"
+    run_or_echo rm -rf /var/www/api /var/www/admin /var/www/shop /var/backups/pulsedeploy
+    run_or_echo rm -f /root/pulsedeploy-crm-credentials.txt
+  else
+    info "Kept: /var/www/{api,admin,shop} (code, .env, uploads), /var/backups/pulsedeploy, the deploy user, automatic security updates"
+  fi
+  return 0
+}
+
 revert_stack() {
   local any=0
+  detected_laravel_next && any=1
   detected_nginx  && any=1
   detected_apache && any=1
   detected_php    && any=1
@@ -385,6 +435,7 @@ revert_stack() {
     return 0
   fi
 
+  revert_laravel_next
   if detected_nginx; then
     stop_units nginx
     remove_matching purge nginx 'nginx-*' 'libnginx-mod-*'

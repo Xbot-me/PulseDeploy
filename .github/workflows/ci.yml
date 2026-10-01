@@ -20,17 +20,37 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Lint entry points
-        run: shellcheck -x bootstrap.sh revert.sh
+        run: shellcheck -x bootstrap.sh revert.sh crm.sh loadtest/run.sh loadtest/seed/seed.sh
 
       - name: Lint library, module and test scripts
         run: |
           find scripts/ tests/ -name "*.sh" | xargs shellcheck -x
+          shellcheck -x bin/pulse
+
+  loadtest:
+    name: Load-test module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Locust
+        run: pip install -r loadtest/requirements.txt
+
+      - name: Behaviour-model and engine tests (real Locust against a mock CRM)
+        run: LT_SLOW_TESTS=1 python3 -m unittest discover -s loadtest/tests -p 'test_*.py'
 
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install nginx (used to validate rendered configs)
+        run: sudo apt-get install -y nginx
 
       - name: Run unit tests
         run: bash tests/run.sh
@@ -84,6 +104,17 @@ jobs:
             "tests/run.sh"
             "scripts/lib/common.sh"
             "scripts/lib/web.sh"
+            "scripts/lib/profile_tuning.sh"
+            "scripts/stacks/laravel_next.sh"
+            "bin/pulse"
+            "crm.sh"
+            "scripts/lib/crm.sh"
+            "apps/crm/aventech.conf"
+            "config/laravel-next/nginx-api.conf"
+            "config/laravel-next/nginx-next.conf"
+            "config/laravel-next/nginx-http.conf"
+            "config/laravel-next/mysql-tuning.cnf"
+            "config/laravel-next/php-fpm-pool.conf"
             "scripts/services/mysql.sh"
             "scripts/stacks/lemp.sh"
             "scripts/stacks/lamp.sh"
