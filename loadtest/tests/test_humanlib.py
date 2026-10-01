@@ -104,6 +104,26 @@ class Extract(unittest.TestCase):
         self.assertEqual(hl.extract({"data": "x"}, "data[*].id"), [])
 
 
+class Accounts(unittest.TestCase):
+    def test_parses_lines_comments_and_colons_in_passwords(self):
+        text = "# staff\na@x.com:secret\n\n  b@x.com : p:a:ss \n"
+        self.assertEqual(hl.parse_accounts(text), [("a@x.com", "secret"), ("b@x.com", " p:a:ss")])
+
+    def test_empty_is_fine(self):
+        self.assertEqual(hl.parse_accounts(""), [])
+        self.assertEqual(hl.parse_accounts(None), [])
+
+    def test_bad_lines_are_reported_with_their_number(self):
+        for text in ("nocolon\n", ":pw\n", "a@x.com:\n"):
+            with self.subTest(text), self.assertRaises(hl.ScenarioError) as ctx:
+                hl.parse_accounts("ok@x.com:pw\n" + text)
+            self.assertIn("line 2", str(ctx.exception))
+
+    def test_paste_markers_are_rejected(self):
+        with self.assertRaises(hl.ScenarioError):
+            hl.parse_accounts("a@x.com:\x1b[200~secret~\n")
+
+
 class Assets(unittest.TestCase):
     HTML = ('<link rel="stylesheet" href="/_next/static/css/a.css?v=1"><script src="/_next/static/a.js"></script>'
             '<script src="//cdn.example.com/x.js"></script><script src="https://evil.example/y.js"></script>'

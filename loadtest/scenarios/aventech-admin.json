@@ -11,7 +11,7 @@
   "shared": { "search_terms": ["shirt", "bag", "shoe", "watch", "dress", "belt"] },
   "setup": [
     { "name": "page: login", "host": "admin", "path": "/login", "html": true, "assets": true, "think": { "median": 4, "sigma": 0.5, "max": 15 } },
-    { "name": "api: login", "host": "admin", "method": "POST", "path": "/api/auth/login",
+    { "name": "api: login", "login": true, "host": "admin", "method": "POST", "path": "/api/auth/login",
       "json": { "email": "{email}", "password": "{password}" }, "expect": [200] }
   ],
   "discover": [
