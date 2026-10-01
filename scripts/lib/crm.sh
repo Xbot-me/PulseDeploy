@@ -67,7 +67,8 @@ CRM_RUN_ENV=()
 # Authentication for private repositories. The token is passed through the
 # environment to a tiny askpass helper, so it never appears in a command line.
 crm_git_setup() {
-  CRM_RUN_ENV=(GIT_TERMINAL_PROMPT=0)
+  # HTTP/1.1: GitHub over HTTP/2 can drop a long fetch on NAT/VM networks ("curl 92 stream not closed cleanly")
+  CRM_RUN_ENV=(GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1)
   if [[ -n "${CRM_GIT_TOKEN:-}" ]]; then
     local askpass="$CRM_ASKPASS"
     if [[ $EUID -ne 0 ]]; then askpass="$(mktemp)"; else install -d -m 755 "$(dirname "$askpass")"; fi
@@ -112,9 +113,9 @@ ${heads##*$'\n'}"
 }
 
 # Shallow checkout of a branch, tag or commit into <dest>, as the app user.
-crm_clone() { # crm_clone <url> <ref> <dest>
+# A dropped connection mid-download is retried from a clean directory.
+crm_clone_once() { # crm_clone_once <url> <ref> <dest>
   local url="$1" ref="$2" dest="$3"
-  [[ "$dest" == "$CRM_WORK"/* ]] || error "refusing to use $dest outside $CRM_WORK"
   rm -rf -- "${dest:?}"
   install -d -o "$APP_USER" -g "$APP_USER" "$dest"
   crm_as_app bash -c '
@@ -125,6 +126,13 @@ crm_clone() { # crm_clone <url> <ref> <dest>
     git fetch -q --depth 1 origin "$3"
     git checkout -q FETCH_HEAD
   ' _ "$dest" "$url" "$ref"
+}
+
+crm_clone() { # crm_clone <url> <ref> <dest>
+  local dest="$3"
+  [[ "$dest" == "$CRM_WORK"/* ]] || error "refusing to use $dest outside $CRM_WORK"
+  retry 3 5 crm_clone_once "$1" "$2" "$3" ||
+    error "Could not download $1 @ $2 after 3 attempts. Check the network, then re-run (nothing else was changed)."
 }
 
 # ── Next.js ───────────────────────────────────────────────────────────────────

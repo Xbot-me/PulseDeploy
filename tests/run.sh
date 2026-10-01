@@ -326,6 +326,7 @@ if [[ $rc -eq 0 ]]; then ok "env files: existing values kept, overwrite on reque
   CRM_GIT_TOKEN=""; CRM_GIT_SSH_KEY_EFFECTIVE="/keys/deploy"; crm_git_setup
   [[ "${CRM_RUN_ENV[*]}" == *"GIT_SSH_COMMAND=ssh -i /keys/deploy -o IdentitiesOnly=yes -o BatchMode=yes"* ]] || exit 6
   [[ "${CRM_RUN_ENV[*]}" != *ASKPASS* ]] || exit 7
+  [[ "${CRM_RUN_ENV[*]}" == *"GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1"* ]] || exit 16   # robust against dropped HTTP/2 streams
   exit 0
 ); rc=$?
 if [[ $rc -eq 0 ]]; then ok "git auth: token answered via askpass from the environment (not stored), ssh key command built"; else bad "crm git auth (exit $rc)"; fi
