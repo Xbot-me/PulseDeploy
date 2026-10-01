@@ -87,3 +87,31 @@ pulse status | pulse logs admin | pulse rollback shop | sudo pulse backup
 Building on the server needs memory: the installer sizes Node's heap from the RAM
 and the stack enables swap on servers with 4 GB or less. For very small servers,
 build in CI instead and use `pulse deploy` (see `examples/github-actions/`).
+
+## When GitHub cannot be reached reliably
+
+If a download keeps breaking part-way (`curl 56 ... connection reset / timed out`,
+`curl 92 ... stream not closed cleanly`, `early EOF`), the network between the server and
+GitHub is dropping long transfers. The installer retries three times from a clean
+directory and uses HTTP/1.1 for git. If it still fails:
+
+1. **Let TCP discover the path size.** A common cause on VM/NAT networks is that large
+   packets vanish while ICMP (which would tell the sender to use smaller ones) is filtered:
+   small requests work, long downloads stall. This is safe and takes effect at once:
+   ```bash
+   sudo sysctl -w net.ipv4.tcp_mtu_probing=1
+   echo 'net.ipv4.tcp_mtu_probing = 1' | sudo tee /etc/sysctl.d/99-mtu-probing.conf
+   ```
+2. **Bring the repository over another way.** On a machine that can reach GitHub:
+   ```bash
+   git clone --branch <branch> https://github.com/<owner>/<repo>.git crm
+   git -C crm bundle create ../crm.bundle --all
+   scp crm.bundle ec2-user@<server>:/tmp/
+   ```
+   On the server (the `deploy` user must be able to read it):
+   ```bash
+   sudo git clone /tmp/crm.bundle /srv/crm && sudo chmod -R a+rX /srv/crm
+   sudo bash crm.sh update --only backend --crm-repo file:///srv/crm --crm-ref <branch>
+   ```
+   `--crm-repo` (and `--check`) accept `file:///path`; no token is needed for a local clone.
+
