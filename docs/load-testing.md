@@ -36,8 +36,9 @@ the behaviour model and the scenario format can drive any other HTTP client.
 
 ## Requirements
 
-* Python 3.9 or newer (`python3 -m venv` available). `run.sh` creates `loadtest/.venv`
-  once and installs Locust there. On Windows use WSL.
+* Python 3.9 or newer. `run.sh` finds it as `python3`, `python` or `py`, then creates
+  `loadtest/.venv` once and installs Locust there. On Windows use Git Bash (Python from
+  python.org) or WSL; `.gitattributes` keeps the scripts' line endings Unix-style.
 * **Run it from a different machine than the server.** Load generated on the server's own
   CPUs mostly measures the load generator: an earlier test on a 2-CPU VM showed this.
 * Test the **origin** directly (an IP, or a hostname that bypasses the CDN), not through
