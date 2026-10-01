@@ -520,6 +520,9 @@ check_not "loadtest/run.sh needs a target"            bash "$ROOT/loadtest/run.s
 check_not "loadtest/run.sh rejects an unknown flag"   bash "$ROOT/loadtest/run.sh" --bogus
 check_not "loadtest/run.sh refuses an oversized plan" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --profile spike --users 80 --check
 check_not "loadtest/run.sh without a terminal needs --yes" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test </dev/null
+printf '\033[200~secret~' >"$TMP/pw-bad"; printf 'secret' >"$TMP/pw-good"
+check_not "loadtest/run.sh rejects a password file with paste markers" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-bad" --check
+check "loadtest/run.sh accepts a clean password file"  bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-good" --check
 check "loadtest/run.sh --check validates and sends nothing" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin:1,aventech-storefront:3 --check
 if command -v python3 >/dev/null 2>&1; then
   check "loadtest python files compile"               python3 -m py_compile "$ROOT/loadtest/humanlib.py" "$ROOT/loadtest/locustfile.py" "$ROOT/loadtest/tests/mock_server.py"
