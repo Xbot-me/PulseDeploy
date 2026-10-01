@@ -215,3 +215,6 @@ Fix `FAIL` first. Then look at `WARN` lines with a number next to them:
 
 Run it after every install, after each `pulse-crm update`, and on a schedule
 (`/etc/cron.d`, weekly, output to a log). To compare over time, keep the output files.
+
+For realistic multi-user load from a separate machine (people logging in, browsing, leaving; breakpoint
+and spike profiles), use the load-test module: [load-testing.md](load-testing.md).
