@@ -25,7 +25,7 @@ APPS_ROOT="${APPS_ROOT:-/var/www}"
 SAMPLES="${AUDIT_SAMPLES:-20}"
 P95_LIMIT_MS="${AUDIT_P95_MS:-300}"
 PASS=0; WARN=0; FAIL=0; SKIP=0
-OPC_FILES=""; POOL_CHILDREN=""
+OPC_FILES=""; POOL_CHILDREN=""; INI_FILE=""
 LOAD_PATH="/up"; LOAD_REQUESTS=200; LOAD_CONC=10; LOAD_HEADERS_FILE=""
 
 pass()  { PASS=$((PASS + 1)); printf '  %s %s\n' "${GREEN}PASS${RESET}" "$*"; }
@@ -92,6 +92,14 @@ php_budget_mb() { # php_budget_mb <ram> <buffer pool> <redis max> <admin max> <s
   echo $(($1 - $2 - 300 - $3 - $4 - $5 - 512))
 }
 
+# More PHP workers than a few per CPU only add context switching: a request needs CPU
+# for most of its time. Allow 6 per CPU (database and network waits), never below 4.
+cpu_children_cap() { # cpu_children_cap <cpus>
+  local n=$(($1 * 6))
+  ((n < 4)) && n=4
+  echo "$n"
+}
+
 # Largest pm.max_children the budget allows at a measured worker size (never below 4).
 suggest_children() { # suggest_children <budget mb> <worker mb>
   local n=$(($1 / ($2 > 0 ? $2 : 1)))
@@ -156,6 +164,7 @@ audit_php() {
     else
       warnc "opcache.validate_timestamps=${v:-unset}: PHP re-checks files on a timer. Set PHP_OPCACHE_VALIDATE=0 for the fastest production mode"
     fi
+    INI_FILE="$ini"
     OPC_FILES="$(ini_val "$ini" opcache.max_accelerated_files)"
     note "opcache.memory_consumption=$(ini_val "$ini" opcache.memory_consumption)M  jit=$(ini_val "$ini" opcache.jit)  jit_buffer=$(ini_val "$ini" opcache.jit_buffer_size)  memory_limit=$(ini_val "$ini" memory_limit)"
     [[ "$(ini_val "$ini" expose_php)" =~ ^[Oo]ff$ ]] && pass "expose_php=Off" || warnc "expose_php is not Off"
@@ -419,11 +428,21 @@ audit_load() {
   if [[ "${peak_n:-0}" -gt 0 ]]; then
     wmb=$(((peak_sum / peak_n + 1023) / 1024))
     note "PHP workers at the peak: ${peak_n} running (pool limit ${POOL_CHILDREN:-?}), about ${wmb} MB each (largest $(((peak_max + 1023) / 1024)) MB); the default sizing assumes 60 MB"
-    [[ -n "${POOL_CHILDREN:-}" && "$peak_n" -ge "$POOL_CHILDREN" ]] && warnc "every PHP worker was busy at once: requests queued behind pm.max_children=${POOL_CHILDREN}. Raise it if memory allows (below), or make the endpoint faster"
+    if [[ -n "${POOL_CHILDREN:-}" && "$peak_n" -ge "$POOL_CHILDREN" ]]; then
+      if awk -v v="$cb" 'BEGIN { exit !(v >= 85) }'; then
+        note "every PHP worker was busy at once, but the CPU was ${cb}% busy: the queue is the CPU limit, not pm.max_children=${POOL_CHILDREN}"
+      else
+        warnc "every PHP worker was busy at once while the CPU had room (${cb}% busy): requests queued behind pm.max_children=${POOL_CHILDREN}. Raise it if memory allows (below), or find what the workers are waiting for (database, network)"
+      fi
+    fi
     budget="$(php_budget_mb "$RAM" "$(tune_mysql_buffer_pool "$RAM")" "$(tune_redis_mem "$RAM")" "$(tune_node_memory_max "$RAM" admin)" "$(tune_node_memory_max "$RAM" shop)")"
     if [[ "$budget" -gt 0 ]]; then
-      sug="$(suggest_children "$budget" "$wmb")"
-      note "memory left for PHP after the database, Redis, both Node apps and the OS: about ${budget} MB -> up to ${sug} workers at ${wmb} MB (pool limit now ${POOL_CHILDREN:-?})"
+      local wfloor=$((wmb < 30 ? 30 : wmb)) cap sug_mem
+      sug_mem="$(suggest_children "$budget" "$wfloor")"
+      cap="$(cpu_children_cap "$(nproc)")"
+      sug=$((sug_mem < cap ? sug_mem : cap))
+      note "ceiling for pm.max_children: ${sug} = the lower of memory (${budget} MB / ${wfloor} MB per worker = ${sug_mem}) and CPU (6 per CPU = ${cap}); pool limit now ${POOL_CHILDREN:-?}"
+      note "the memory figure uses at least 30 MB per worker: this burst measured ${wmb} MB on light requests, but one heavy request (export, image upload) can use far more (memory_limit is $(ini_val "${INI_FILE:-/dev/null}" memory_limit))"
     else
       warnc "no memory is left for PHP workers after the other services (${budget} MB): this machine is too small for the sizing in use"
     fi

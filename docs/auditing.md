@@ -150,7 +150,25 @@ requests), the database pool and Redis limit are changed live with no restart, a
 Node app restarts for about a second. A plan that does not fit in RAM is refused unless
 `--force` is given. Afterwards run `audit.sh` again and compare.
 
-### 4. Where the real gains usually are
+### 4. Count what one request really costs
+
+When the CPU is saturated, the cost of a single request is the whole story. This counts the
+database statements and writes that one authenticated API call causes:
+
+```bash
+sudo bash -c '
+q() { mysql -NBe "SHOW GLOBAL STATUS LIKE \"$1\"" | awk "{print \$2}"; }
+API=$(awk -F= "/^API_HOST=/ {print \$2}" /etc/pulsedeploy/pulse.conf)
+a=$(q Questions); u=$(q Com_update); i=$(q Com_insert); c=$(q Connections)
+curl -s -o /dev/null -H "Host: $API" -H @/root/load-headers http://127.0.0.1/api/v1/admin/me
+echo "statements: $(( $(q Questions) - a - 1 ))  updates: $(( $(q Com_update) - u ))  inserts: $(( $(q Com_insert) - i ))  new connections: $(( $(q Connections) - c - 3 ))"'
+```
+
+(The `- 1` and `- 3` remove the status queries themselves.) A read-only request that causes
+an UPDATE, or a dozen statements, is the place to optimise: cache what does not change per
+request, and avoid writes on reads.
+
+### 5. Where the real gains usually are
 
 Server settings rarely matter as much as these, so check them before tuning further:
 
