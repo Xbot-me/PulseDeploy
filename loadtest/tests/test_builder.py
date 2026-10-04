@@ -249,6 +249,25 @@ class GeneratedScenarioRuns(unittest.TestCase):
         self.assertIn("What this means", summary["text"])
         self.assertIn("RESULT: PASS", summary["text"])
 
+    def test_relative_scenario_path_through_run_sh(self):
+        """run.sh must hand Locust an absolute path: Locust starts in loadtest/, not where you ran the command."""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Site)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            scn, _ = builder.from_urls("/\n", "rel", f"http://127.0.0.1:{port}")
+            with tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "rel.json").write_text(json.dumps(scn))
+                env = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+                           LT_SMOKE_SECONDS="6", LT_TIME_SCALE="0.02", LT_PROGRESS="0")
+                proc = subprocess.run(["bash", str(LOADTEST / "run.sh"), "--scenario", "rel.json:2", "--profile", "smoke",
+                                       "--yes", "--no-venv", "--out", str(Path(tmp) / "out")],
+                                      env=env, cwd=tmp, capture_output=True, text=True, timeout=120)
+        finally:
+            server.shutdown()
+        self.assertEqual(proc.returncode, 0, proc.stdout[-1500:] + proc.stderr[-1500:])
+        self.assertIn("RESULT: PASS", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

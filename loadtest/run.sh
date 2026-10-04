@@ -209,6 +209,13 @@ for item in "${ITEMS[@]}"; do
   name="${item%%:*}"
   if [[ -f "$name" ]]; then FILES+=("$name"); else FILES+=("$HERE/scenarios/$name.json"); fi
 done
+# Locust runs from loadtest/, so scenario files must be given by absolute path
+RESOLVED=""
+for item in "${ITEMS[@]}"; do
+  name="${item%%:*}"; weight=""; [[ "$item" == *:* ]] && weight=":${item#*:}"
+  if [[ -f "$name" ]]; then name="$(cd "$(dirname "$name")" && pwd)/$(basename "$name")"; fi
+  RESOLVED+="${RESOLVED:+,}$name$weight"
+done
 CHECK_OUT="$("${PY[@]}" "$HERE/humanlib.py" "${FILES[@]}")" || error "Scenario problem:
 $CHECK_OUT"
 CHECK_OUT="${CHECK_OUT//$'\r'/}" # Windows Python ends lines with CRLF
@@ -281,7 +288,7 @@ else
 fi
 
 mkdir -p "$OUT"
-export LT_SCENARIO="$SCENARIO" LT_PROFILE="$PROFILE" LT_USERS="$USERS" LT_HOLD="$HOLD" LT_SPAWN="$SPAWN"
+export LT_SCENARIO="$RESOLVED" LT_PROFILE="$PROFILE" LT_USERS="$USERS" LT_HOLD="$HOLD" LT_SPAWN="$SPAWN"
 export LT_WRITES="$WRITES" LT_MAX_FAIL="$MAX_FAIL" LT_P95_MS="$P95_MS" LT_TIME_SCALE="$TIME_SCALE" LT_OUT="$OUT"
 export LT_VAR_STORE="$STORE" LT_SHARE_LOGIN="$SHARE_LOGIN"
 [[ -z "$ACCOUNTS_FILE" ]] || export LT_ACCOUNTS_FILE="$ACCOUNTS_FILE"

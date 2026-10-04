@@ -47,6 +47,7 @@ MARK = env("LT_MARK", "1") == "1"
 RUN_ID = env("LT_RUN_ID", time.strftime("%Y%m%d-%H%M%S"))
 MAX_FAIL = env_num("LT_MAX_FAIL", 0.01)  # fraction of failed requests allowed
 P95_MS = env_num("LT_P95_MS", 1500)  # slowest acceptable p95 of any endpoint
+MIN_SAMPLES = int(env_num("LT_MIN_SAMPLES", 5))  # an endpoint with fewer requests is reported but not judged
 TIME_SCALE = env_num("LT_TIME_SCALE", 1.0)  # <1 shortens every human pause (tests, or a harsher "fast clicker" run)
 BASES = {k[8:].lower(): v.rstrip("/") for k, v in os.environ.items() if k.startswith("LT_BASE_") and v}
 HOST_HEADERS = {k[11:].lower(): v for k, v in os.environ.items() if k.startswith("LT_HOSTHDR_") and v}
@@ -85,7 +86,9 @@ def load_scenarios():
     if not env("LT_SCENARIO"):
         sys.exit("LT_SCENARIO is not set; run this through run.sh or pulse-lt")
     for item in env("LT_SCENARIO").split(","):
-        name, _, weight = item.strip().partition(":")
+        name, _, weight = item.strip().rpartition(":")
+        if not name or not weight.replace(".", "", 1).isdigit():  # no weight: the colon belongs to the path (C:\...)
+            name, weight = item.strip(), ""
         path = Path(name) if Path(name).exists() else HERE / "scenarios" / f"{name}.json"
         scn = hl.load_scenario(path)
         for host in hl.hosts_used(scn):
@@ -446,7 +449,7 @@ def print_verdict(**_):
 def plain_english(rows, total, ratio, peak, broke, profile, problems):
     """A few sentences a non-specialist can act on."""
     out = []
-    busy = [r for r in rows if r["requests"] >= 20]
+    busy = [r for r in rows if r["requests"] >= MIN_SAMPLES and not r["name"].startswith("[static]")]
     if profile == "breakpoint" and broke:
         out.append(f"What this means: it held up to about {max(broke[0] - 1, 0)} people at once and went past your limits at {broke[0]}.")
     elif peak and not problems:
@@ -454,9 +457,12 @@ def plain_english(rows, total, ratio, peak, broke, profile, problems):
                    f"({100 * ratio:.2f}% failures, slowest p95 {max((r['p95_ms'] for r in busy), default=0):.0f} ms).")
     elif peak:
         out.append(f"What this means: with up to {peak} people at once it went past your limits.")
+    thin = [r["name"] for r in rows if r["requests"] < MIN_SAMPLES and not r["name"].startswith("[static]")]
     slow = sorted(busy, key=lambda r: -r["p95_ms"])[:3]
     if slow:
         out.append("Slowest: " + "; ".join(f"{r['name']} (p95 {r['p95_ms']:.0f} ms)" for r in slow))
+    if thin:
+        out.append(f"Too few requests to judge timing ({MIN_SAMPLES} needed): " + "; ".join(thin[:4]) + ("; ..." if len(thin) > 4 else "") + ". Run longer or with more people.")
     bad = sorted((r for r in rows if r["failures"]), key=lambda r: -r["failures"])[:3]
     if bad:
         out.append("Failing: " + "; ".join(f"{r['name']} ({r['failures']} of {r['requests']})" for r in bad))
@@ -477,7 +483,7 @@ def verdict(environment, **_):
         p50, p95, p99 = (e.get_response_time_percentile(p) or 0 for p in (0.5, 0.95, 0.99))
         rows.append({"name": e.name, "requests": e.num_requests, "failures": e.num_failures,
                      "p50_ms": p50, "p95_ms": p95, "p99_ms": p99, "avg_ms": round(e.avg_response_time, 1)})
-        if e.num_requests >= 20:
+        if e.num_requests >= MIN_SAMPLES and not e.name.startswith("[static]"):
             worst = max(worst, p95)
     problems = []
     if total == 0:

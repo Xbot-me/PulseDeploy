@@ -196,6 +196,8 @@ the behaviour model and the scenario format can drive any other HTTP client.
 
 The run **fails** when more than `--max-fail` (default 1%) of requests fail, or any
 endpoint's p95 exceeds `--p95-ms` (default 1500 ms). Setup requests (logins, discovery) are not counted.
+An endpoint is judged only after 5 requests (`LT_MIN_SAMPLES`); rarer ones are listed as "too few requests to judge", so
+run longer or with more people if you see that line. Static files never count toward the verdict.
 
 ## Watch the server while it runs
 
