@@ -2,8 +2,9 @@
 # =============================================================================
 # PulseDeploy - loadtest/run.sh: human-like load against a server you own
 #
-#   bash loadtest/run.sh --ip 203.0.113.10 --domain crm.test \
-#        --email admin@crm.test --password-file ~/lt-password --profile average --users 20
+#   bash loadtest/run.sh --scenario my-app.json --url https://staging.example.com --users 20
+#
+# Most people want the friendlier front end: bin/pulse-lt (init, check, run, report).
 #
 # Run it from a DIFFERENT machine than the server (your laptop or a second VM): load
 # generated on the server's own CPUs measures the load generator as much as the server.
@@ -16,33 +17,39 @@ ROOT="$(cd "$HERE/.." && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 
-SCENARIO="aventech-admin"; PROFILE="average"; USERS=20; HOLD=600; SPAWN="0.4"; STORE="main"
-EMAIL=""; PASSWORD_FILE=""; WRITES=0; MAX_FAIL="0.01"; P95_MS="1500"; TIME_SCALE="1"; SEED=""
+SCENARIO=""; PROFILE="average"; USERS=20; HOLD=600; SPAWN="0.4"; STORE="main"
+EMAIL=""; USERNAME_ARG=""; TOKEN_FILE=""; URL=""; PASSWORD_FILE=""; WRITES=0; MAX_FAIL="0.01"; P95_MS="1500"; TIME_SCALE="1"; SEED=""
 ACCOUNTS_FILE=""; SHARE_LOGIN=1
 OUT=""; ASSUME_YES=0; ALLOW_LARGE=0; CHECK_ONLY=0; VERBOSE=0; NO_VENV=0
 STEP_USERS=""; STEP_SECONDS=""; MAX_USERS=""; IP=""; DOMAIN=""
-declare -a BASES=() HOSTHDRS=()
+declare -a BASES=() HOSTHDRS=() HEADERS=()
 
 usage() {
   cat <<'EOF'
 Usage: bash loadtest/run.sh [target] [what to run] [options]
 
 TARGET (where the traffic goes; the servers must be yours)
+  --url <address>                 the site to test, e.g. https://staging.example.com (scenarios made by
+                                  'pulse-lt init' remember it, so this is optional for them)
+  --header "Name: value"          send this header with every request, repeatable
+  --token-file <f>                send "Authorization: Bearer <contents of f>" with every request
   --ip <addr> --domain <domain>   a server reached by IP, hosts api.<domain> admin.<domain> shop.<domain>
                                   (sets the Host header, so no DNS entry is needed)
   --base <key>=<url>              base URL of one host key, repeatable (key = api, admin, shop, ...)
   --host-header <key>=<name>      Host header to send to that key, repeatable
 
 WHAT TO RUN
-  --scenario <a[:w],b[:w]>        scenario files in loadtest/scenarios (default aventech-admin);
+  --scenario <a[:w],b[:w]>        REQUIRED. A scenario file (path), or the name of one in loadtest/scenarios;
                                   several run together, w is the share of virtual users
   --profile <name>                smoke | average (default) | peak | spike | soak | breakpoint
   --users <n>                     the "normal" number of people on the site (default 20)
   --hold <seconds>                how long to hold the load (default 600)
   --spawn <per second>            new people per second, also paces logins (default 0.4)
-  --store <slug>                  tenant (X-Store-Subdomain) to use (default main)
-  --email <e> --password-file <f> staff login used by the scenarios (the password is never
+  --store <slug>                  {store} value used by the AvenTech CRM scenarios (default main)
+  --username <u> --password-file <f>
+                                  login used by the scenario's sign-in step (the password is never
                                   taken from the command line; or set LT_VAR_PASSWORD)
+  --email <e>                     same as --username, for scenarios that say {email}
   --accounts-file <f>             one "email:password" per line: each virtual person gets their own
                                   account (cycled). Without it, everyone shares the one --email login
   --no-share-login                with a single account, make every person log in (the CRM allows only
@@ -78,6 +85,10 @@ is_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
 declare -a EXTRA_VARS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --url) need_value "$@"; URL="$2"; shift 2 ;;
+    --header) need_value "$@"; HEADERS+=("$2"); shift 2 ;;
+    --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
+    --username) need_value "$@"; USERNAME_ARG="$2"; shift 2 ;;
     --ip) need_value "$@"; IP="$2"; shift 2 ;;
     --domain) need_value "$@"; DOMAIN="$2"; shift 2 ;;
     --base) need_value "$@"; BASES+=("$2"); shift 2 ;;
@@ -114,6 +125,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── validate everything before anything else happens ──────────────────────────
+[[ -n "$SCENARIO" ]] || error "Say what to run: --scenario FILE (make one with: bin/pulse-lt init). Example scenarios: loadtest/scenarios/"
 case "$PROFILE" in smoke | average | peak | spike | soak | breakpoint) ;; *) error "Unknown --profile '$PROFILE'" ;; esac
 is_int "$USERS" || error "--users must be a whole number >= 1"
 [[ "$USERS" -ge 1 ]] || error "--users must be a whole number >= 1"
@@ -136,8 +148,21 @@ fi
 for b in "${BASES[@]}"; do [[ "$b" =~ ^[a-z][a-z0-9_]*=https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/-]*)?$ ]] || error "Invalid --base '$b' (expected key=http(s)://host[:port])"; done
 for h in "${HOSTHDRS[@]}"; do [[ "$h" =~ ^[a-z][a-z0-9_]*=[A-Za-z0-9.-]+$ ]] || error "Invalid --host-header '$h' (expected key=name)"; done
 for v in "${EXTRA_VARS[@]}"; do [[ "$v" =~ ^[a-z][a-z0-9_]*=.+$ ]] || error "Invalid --var '$v' (expected name=value)"; done
-[[ ${#BASES[@]} -gt 0 ]] || error "No target: give --ip and --domain, or --base key=URL"
+if [[ -n "$URL" ]]; then
+  [[ "$URL" =~ ^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/-]*)?$ ]] || error "Invalid --url '$URL' (expected http(s)://host[:port][/path])"
+  URL="${URL%/}"
+fi
+for h in ${HEADERS[@]+"${HEADERS[@]}"}; do
+  [[ "$h" =~ ^[A-Za-z0-9-]+:[[:space:]]*[^[:cntrl:]]+$ ]] || error "Invalid --header '$h' (expected \"Name: value\")"
+done
+TOKEN=""
+if [[ -n "$TOKEN_FILE" ]]; then
+  [[ -r "$TOKEN_FILE" ]] || error "Cannot read --token-file $TOKEN_FILE"
+  TOKEN="$(tr -d '\r\n' <"$TOKEN_FILE")"
+  [[ -n "$TOKEN" && ! "$TOKEN" =~ [[:cntrl:][:space:]] ]] || error "--token-file must hold one token with no spaces or control characters"
+fi
 
+[[ -n "$USERNAME_ARG" ]] || USERNAME_ARG="$EMAIL"
 PASSWORD="${LT_VAR_PASSWORD:-}"
 if [[ -n "$PASSWORD_FILE" ]]; then
   [[ -r "$PASSWORD_FILE" ]] || error "Cannot read --password-file $PASSWORD_FILE"
@@ -187,11 +212,19 @@ done
 CHECK_OUT="$("${PY[@]}" "$HERE/humanlib.py" "${FILES[@]}")" || error "Scenario problem:
 $CHECK_OUT"
 CHECK_OUT="${CHECK_OUT//$'\r'/}" # Windows Python ends lines with CRLF
-for host in $(grep -oE 'hosts=[A-Za-z0-9_,]+' <<<"$CHECK_OUT" | cut -d= -f2 | tr ',' '\n' | sort -u); do
+# the address: --url, else the one the scenario remembers (written by 'pulse-lt init')
+if [[ -z "$URL" ]]; then
+  URL="$(grep -oE ' url=[^ ]+' <<<"$CHECK_OUT" | head -1 | cut -d= -f2 || true)"
+fi
+# shellcheck disable=SC2207
+NEEDED=($(grep -oE 'hosts=[A-Za-z0-9_,]+' <<<"$CHECK_OUT" | cut -d= -f2 | tr ',' '\n' | sort -u)) # word splitting is intended (bash 3.2 has no mapfile)
+for host in "${NEEDED[@]}"; do
   found=0
   for b in "${BASES[@]}"; do [[ "${b%%=*}" == "$host" ]] && found=1; done
-  [[ "$found" -eq 1 ]] || error "The scenarios use host '$host': add --base $host=URL (or --ip/--domain)"
+  if [[ "$found" -eq 0 && -n "$URL" && ${#NEEDED[@]} -eq 1 ]]; then BASES+=("$host=$URL"); found=1; fi
+  [[ "$found" -eq 1 ]] || error "The scenarios use host '$host': add --base $host=URL (or --url for a scenario with a single host, or --ip/--domain)"
 done
+[[ ${#BASES[@]} -gt 0 ]] || error "No target: give --url https://your-site (or --base key=URL, or --ip and --domain)"
 
 # the name the operator must type: the Host header of the first target, else its URL host
 first="${BASES[0]}"; CONFIRM_NAME="${first#*=}"; CONFIRM_NAME="${CONFIRM_NAME#*://}"; CONFIRM_NAME="${CONFIRM_NAME%%[:/]*}"
@@ -207,7 +240,10 @@ for b in "${BASES[@]}"; do
   for h in "${HOSTHDRS[@]}"; do [[ "${h%%=*}" == "$key" ]] && hh="  (Host: ${h#*=})"; done
   printf '  %-14s %s%s\n' "Target $key" "${b#*=}" "$hh"
 done
-printf '  %-14s %s\n' "Store" "$STORE"
+[[ "$STORE" == "main" ]] || printf '  %-14s %s\n' "Store" "$STORE"
+if [[ -n "$TOKEN" || ${#HEADERS[@]} -gt 0 ]]; then
+  printf '  %-14s %s\n' "Extra headers" "$(( ${#HEADERS[@]} + (${#TOKEN} > 0 ? 1 : 0) )) (values not shown)"
+fi
 if [[ -n "$ACCOUNTS_FILE" ]]; then
   LOGIN_NOTE="one account per person ($(grep -c . "$ACCOUNTS_FILE") accounts)"
 elif [[ "$SHARE_LOGIN" -eq 1 ]]; then
@@ -215,7 +251,7 @@ elif [[ "$SHARE_LOGIN" -eq 1 ]]; then
 else
   LOGIN_NOTE="one shared account, every person logs in"
 fi
-printf '  %-14s %s\n' "Logins" "$LOGIN_NOTE"
+if [[ -n "$ACCOUNTS_FILE" || -n "$PASSWORD" || -n "$USERNAME_ARG" ]]; then printf '  %-14s %s\n' "Logins" "$LOGIN_NOTE"; fi
 printf '  %-14s %s\n' "Writes data" "$([[ $WRITES -eq 1 ]] && echo 'YES (carts / orders are created)' || echo no)"
 printf '  %-14s fail > %s%% or p95 > %s ms\n' "Fails when" "$(awk -v f="$MAX_FAIL" 'BEGIN { printf "%g", f * 100 }')" "$P95_MS"
 printf '  %-14s %s\n' "Results" "$OUT"
@@ -250,6 +286,11 @@ export LT_WRITES="$WRITES" LT_MAX_FAIL="$MAX_FAIL" LT_P95_MS="$P95_MS" LT_TIME_S
 export LT_VAR_STORE="$STORE" LT_SHARE_LOGIN="$SHARE_LOGIN"
 [[ -z "$ACCOUNTS_FILE" ]] || export LT_ACCOUNTS_FILE="$ACCOUNTS_FILE"
 [[ -z "$EMAIL" ]] || export LT_VAR_EMAIL="$EMAIL"
+[[ -z "$USERNAME_ARG" ]] || export LT_VAR_USERNAME="$USERNAME_ARG"
+HEADER_LINES=""
+for h in ${HEADERS[@]+"${HEADERS[@]}"}; do HEADER_LINES+="$h"$'\n'; done
+[[ -z "$TOKEN" ]] || HEADER_LINES+="Authorization: Bearer $TOKEN"$'\n'
+[[ -z "$HEADER_LINES" ]] || export LT_HEADERS="$HEADER_LINES"
 [[ -z "$PASSWORD" ]] || export LT_VAR_PASSWORD="$PASSWORD"
 [[ -z "$SEED" ]] || export LT_SEED="$SEED"
 [[ -z "$STEP_USERS" ]] || export LT_STEP_USERS="$STEP_USERS"
