@@ -1,35 +1,138 @@
 # Load testing with human-like traffic
 
-`loadtest/` generates the traffic of **people**, not a flood of identical requests:
-they log in once, look at a page, think, click, sometimes leave half-way, and a
-different person arrives later. It is meant to answer "how many people can this
-server serve before it hurts, and what breaks first?", for a server you own.
+`pulse-lt` load-tests **any** website or API you own and tells you, in plain words, how many
+people it can serve before it hurts and what breaks first. It generates the traffic of
+**people**, not a flood of identical requests: they sign in once, look at a page, think, click,
+sometimes leave half-way, and a different person arrives later.
 
 ```bash
-# from your laptop or a second VM, NOT from the server being tested
-bash loadtest/run.sh --ip 203.0.113.10 --domain crm.test \
-     --email admin@crm.test --password-file ~/lt-password \
-     --profile average --users 20 --hold 600
+bash bin/pulse-lt init                                  # 1. describe your site (a few questions)
+bash bin/pulse-lt check my-site.json                    # 2. see the plan, send nothing
+bash bin/pulse-lt run   my-site.json --profile smoke    # 3. a one-minute trial with 5 people
+bash bin/pulse-lt run   my-site.json --users 50         # 4. the real run
+bash bin/pulse-lt report                                # show the last verdict again
 ```
 
-It prints the plan, asks you to type the target's name, then runs and finishes with a
-verdict (`RESULT: PASS` / `FAIL`, exit status 0 / 1). Results land in
+Run it from your laptop or a second machine, **not** from the server being tested. It prints the
+plan, asks you to type the target's name, runs, and ends with a verdict:
+
+```
+RESULT: FAIL - slowest endpoint p95 2310 ms (limit 1500 ms)
+What this means: with up to 50 people at once it went past your limits.
+Slowest: GET /search (p95 2310 ms); GET /products (p95 1190 ms)
+Failing: POST /api/cart (4 of 160)
+```
+
+Exit status is 0 for PASS and 1 for FAIL, so it works in CI. Results land in
 `loadtest/results/<time>/`: `report.html`, CSV files and `summary.json`.
+
+## Step 1: describe your site (`pulse-lt init`)
+
+A **scenario** is a small JSON file listing what people do. You never have to write one by hand.
+There are three ways to make it.
+
+### Answer questions
+
+```bash
+bash bin/pulse-lt init
+```
+
+It asks for the site address, whether it is a website or an API, how people sign in (nobody, a
+token you supply at run time, or a login form/endpoint) and then the pages or endpoints people
+use. A blank line ends one "visit" (a few steps in a row); a single dot ends the list.
+
+### Give it a list of paths
+
+```bash
+bash bin/pulse-lt init --from-urls urls.txt --url https://staging.example.com --name my-site
+```
+
+```text
+# journey: browse the shop
+/
+/products?page=2
+/products/42
+
+# journey: search
+/search?q=shirt weight=3
+
+POST /api/cart
+```
+
+One path (or full URL) per line, optionally with a method. A blank line starts the next visit,
+`# journey: name` names it, and `weight=3` on any line of a visit makes it three times as common.
+Non-GET lines are marked as writes and skipped unless you run with `--writes`.
+For a site with a login: `--login /api/login --user-field email --pass-field password --token-path data.token`
+(leave `--token-path` out when the server sets a session cookie).
+
+### Record a real visit
+
+In Chrome, Edge or Firefox: open DevTools, **Network** tab, click through your site the way a
+customer would, then **Save all as HAR with content**.
+
+```bash
+bash bin/pulse-lt init --from-har my-visit.har --name my-site
+```
+
+The recording is cleaned up before it becomes a scenario: scripts, styles, images and fonts,
+failed requests and requests to other sites are dropped; the pauses you took become the think
+times; a long pause starts a new visit; a login request becomes the sign-in step. **Credentials
+are never copied**: passwords in recorded bodies become `{password}`, `Authorization` and `Cookie`
+headers are ignored, and fields such as `token` or `card_number` are removed. It prints notes about
+anything you must supply at run time. Read the generated paths once: they are copied as recorded.
+
+## Step 2: run it (`pulse-lt check`, `pulse-lt run`)
+
+```bash
+bash bin/pulse-lt run my-site.json --url https://staging.example.com --users 50 --hold 600
+```
+
+`--url` is optional when the scenario was made by `init` with an address (it remembers it).
+
+| Option | Meaning |
+|---|---|
+| `--users N` | the normal number of people on the site at once (default 20) |
+| `--profile NAME` | `smoke`, `average` (default), `peak`, `spike`, `soak`, `breakpoint` (see below) |
+| `--hold SECONDS` | how long to hold the load (default 600) |
+| `--username U --password-file F` | sign-in for a scenario that logs in; the password is never taken from the command line (or set `LT_VAR_PASSWORD`) |
+| `--accounts-file F` | one `username:password` per line: each person gets their own account (cycled) |
+| `--token-file F` | send `Authorization: Bearer <token>` with every request |
+| `--header "Name: value"` | send a header with every request (repeatable) |
+| `--max-fail 0.01` | fail the run above this share of failed requests (default 1%) |
+| `--p95-ms 1500` | fail the run when any endpoint's p95 is slower (default 1500 ms) |
+| `--writes` | also run steps that create or change data. Test systems only |
+| `--yes` | skip the "type the target's name" confirmation (automation) |
+| `--time-scale 0.1` | everyone clicks ten times faster (a harsher run) |
+| `--seed TEXT` | repeat a run's random choices |
+| `--out DIR` | results folder |
+
+`bash loadtest/run.sh --help` lists every option (`pulse-lt` is a thin front end for it).
+
+### In CI
+
+```bash
+bash bin/pulse-lt run my-site.json --url https://staging.example.com --profile average --users 30 --hold 300 --yes
+```
+
+The command fails the build when a limit is exceeded.
 
 ## Why Locust, and what is ours
 
-The engine is [Locust](https://locust.io) (open source, plain Python, no browser
-needed, around since 2011), pinned by a version range in `loadtest/requirements.txt`. Everything
-that makes the traffic human, and everything you might need to audit, is small and
-ordinary Python in this repository:
+The engine is [Locust](https://locust.io) (open source, plain Python, no browser needed, around
+since 2011), pinned by a version range in `loadtest/requirements.txt` and installed into
+`loadtest/.venv` on first use. Everything that makes the traffic human, and everything you might
+need to audit, is small, ordinary Python in this repository:
 
 | File | Job |
 |---|---|
+| `bin/pulse-lt` | the command: `init`, `check`, `run`, `report` |
+| `loadtest/init.py`, `loadtest/builder.py` | questions, URL lists and HAR recordings to a scenario (standard library only) |
 | `loadtest/humanlib.py` | think-time model, weighted choices, templates, response parsing, scenario validation (standard library only, fully unit-tested) |
 | `loadtest/locustfile.py` | turns scenario files into virtual people; load profiles; the verdict |
-| `loadtest/scenarios/*.json` | what people do (data, not code) |
 | `loadtest/run.sh` | validates everything, shows the plan, asks for confirmation, runs |
-| `loadtest/tests/` | unit tests, a mock CRM server and end-to-end tests of the engine |
+| `loadtest/report.py` | prints a finished run's verdict again |
+| `loadtest/scenarios/*.json` | example scenarios (the AvenTech CRM ones) |
+| `loadtest/tests/` | unit tests, a mock server and end-to-end tests of the engine |
 
 If you distrust the engine itself, `humanlib.py` and the scenarios do not depend on it:
 the behaviour model and the scenario format can drive any other HTTP client.
@@ -54,7 +157,7 @@ the behaviour model and the scenario format can drive any other HTTP client.
 * More than 200 users at the peak needs `--allow-large`.
 * Every request carries `X-Load-Test: <run id>` so you can find or filter it in server logs.
 * The password is read from a file or the environment, never from the command line.
-* **Logins are throttled by the CRM itself**: `throttle:login` allows 5 attempts a minute per
+* **Logins are often throttled** (the AvenTech CRM, for example): `throttle:login` allows 5 attempts a minute per
   email and IP (nginx adds 30 a minute per IP on the API host). Behind the admin app every
   login reaches the API from `127.0.0.1`, so the limit is effectively per account. Twenty virtual
   staff on one account would be refused almost every time (the first real run saw 81% of login
@@ -107,7 +210,9 @@ what users would see; the audit says why.
 
 ## Scenarios
 
-A scenario is a JSON file in `loadtest/scenarios/` (or any path). Shipped:
+A scenario is a JSON file; `pulse-lt init` writes one for you (above). To write or edit one by hand, the format is below.
+The repository ships two examples in `loadtest/scenarios/`, for the AvenTech CRM that PulseDeploy can install
+(pass the name, e.g. `--scenario aventech-admin`, or any file path):
 
 * `aventech-admin`: back-office staff in the admin app: login page, dashboard, orders, order
   detail, products, search, categories, brands. It goes through the Next.js app (pages and the
@@ -117,7 +222,7 @@ A scenario is a JSON file in `loadtest/scenarios/` (or any path). Shipped:
   product listing or search endpoint for shoppers, and the storefront application itself is not part of
   it, so **add your storefront's own calls** (copy the file and edit it).
 
-Run several at once, with a share of the virtual users each: `--scenario aventech-admin:1,aventech-storefront:9`.
+Run several at once, with a share of the virtual users each: `bash loadtest/run.sh --scenario a.json:1,b.json:9 --url ...`.
 
 ```json
 {
@@ -146,11 +251,13 @@ Step keys: `name`, `path` (required), `host`, `method`, `json`, `headers`, `thin
 `{"path": …, "pick": "random"}`), `extract_shared` (a list for `{any:name}`), `writes` (skipped
 unless `--writes`). In strings: `{name}` is a value of the person or the run (`--var name=value`,
 `--store`, `--email`), `{name?}` is optional (an empty header is dropped) and `{any:list}` picks a
-random element. Check a file without sending anything: `bash loadtest/run.sh --check ...`.
+random element. Check a file without sending anything: `bash bin/pulse-lt check FILE`.
 
-## Realistic test data
+Top-level keys also include `target` (`{"url": "https://staging.example.com"}`, so `--url` becomes optional).
 
-An empty store makes every endpoint look fast. `loadtest/seed/seed.sh` fills a **separate test store**
+## Realistic test data (AvenTech CRM)
+
+An empty database is always fast, whatever you test. For the AvenTech CRM, an empty store makes every endpoint look fast. `loadtest/seed/seed.sh` fills a **separate test store**
 with a catalogue, customers and orders shaped like a real shop: popular products, repeat customers,
 more recent orders than old ones, the CRM's own order statuses, payment methods and districts.
 Run it on the server:

@@ -515,15 +515,31 @@ check_not "file URL with spaces rejected"      vurl "file:///srv/a b"
 check_not "file URL with shell characters rejected" vurl 'file:///srv/x;rm'
 
 echo "── load-test module"
+printf '/\n/pricing\n' >"$TMP/urls.txt"
+printf '{"name":"site","hosts":["app"],"journeys":[{"name":"j","steps":[{"name":"home","path":"/"}]}]}' >"$TMP/lt-site.json"
+printf '{"name":"site","target":{"url":"https://app.example.com"},"hosts":["app"],"journeys":[{"name":"j","steps":[{"name":"home","path":"/"}]}]}' >"$TMP/lt-site-url.json"
 check "loadtest/run.sh --help works"                  bash "$ROOT/loadtest/run.sh" --help
+check_not "loadtest/run.sh needs a scenario"          bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test
 check_not "loadtest/run.sh needs a target"            bash "$ROOT/loadtest/run.sh" --scenario aventech-admin
 check_not "loadtest/run.sh rejects an unknown flag"   bash "$ROOT/loadtest/run.sh" --bogus
-check_not "loadtest/run.sh refuses an oversized plan" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --profile spike --users 80 --check
-check_not "loadtest/run.sh without a terminal needs --yes" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test </dev/null
+check_not "loadtest/run.sh refuses an oversized plan" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin --profile spike --users 80 --check
+check_not "loadtest/run.sh without a terminal needs --yes" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin </dev/null
 printf '\033[200~secret~' >"$TMP/pw-bad"; printf 'secret' >"$TMP/pw-good"
-check_not "loadtest/run.sh rejects a password file with paste markers" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-bad" --check
-check "loadtest/run.sh accepts a clean password file"  bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-good" --check
+check_not "loadtest/run.sh rejects a password file with paste markers" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin --password-file "$TMP/pw-bad" --check
+check "loadtest/run.sh accepts a clean password file"  bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin --password-file "$TMP/pw-good" --check
 check "loadtest/run.sh --check validates and sends nothing" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin:1,aventech-storefront:3 --check
+check "loadtest/run.sh --url binds a single-host scenario" bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url https://app.example.com --check
+check_not "loadtest/run.sh rejects a bad --url"       bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url 'ftp://x' --check
+check_not "loadtest/run.sh rejects a bad --header"    bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url https://a.test --header 'no colon' --check
+printf 'tok en' >"$TMP/tok-bad"
+check_not "loadtest/run.sh rejects a token with spaces" bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url https://a.test --token-file "$TMP/tok-bad" --check
+check "loadtest/run.sh remembers the scenario's address" bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site-url.json" --check
+check "pulse-lt help works"                           bash "$ROOT/bin/pulse-lt" help
+check_not "pulse-lt rejects an unknown command"       bash "$ROOT/bin/pulse-lt" frobnicate
+check_not "pulse-lt run needs a scenario"             bash "$ROOT/bin/pulse-lt" run
+check_not "pulse-lt init refuses to ask without a terminal" bash "$ROOT/bin/pulse-lt" init --out "$TMP/x.json" </dev/null
+check "pulse-lt init --from-urls writes a scenario"   bash "$ROOT/bin/pulse-lt" init --from-urls "$TMP/urls.txt" --url https://app.example.com --out "$TMP/made.json"
+check "pulse-lt check accepts what init wrote"        bash "$ROOT/bin/pulse-lt" check "$TMP/made.json"
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
 check_not "seed.sh rejects an unknown flag"           bash "$ROOT/loadtest/seed/seed.sh" --store t --bogus
@@ -532,8 +548,9 @@ check_not "seed.sh rejects a non-numeric count"       bash "$ROOT/loadtest/seed/
 check_not "seed.sh rejects an oversized plan"         bash "$ROOT/loadtest/seed/seed.sh" --store t --orders 99999999 --dry-run
 check "seed.sh --dry-run changes nothing"             bash "$ROOT/loadtest/seed/seed.sh" --store t --dry-run
 if command -v python3 >/dev/null 2>&1; then
-  check "loadtest python files compile"               python3 -m py_compile "$ROOT/loadtest/humanlib.py" "$ROOT/loadtest/locustfile.py" "$ROOT/loadtest/tests/mock_server.py"
+  check "loadtest python files compile"               python3 -m py_compile "$ROOT/loadtest/humanlib.py" "$ROOT/loadtest/locustfile.py" "$ROOT/loadtest/builder.py" "$ROOT/loadtest/init.py" "$ROOT/loadtest/report.py" "$ROOT/loadtest/tests/mock_server.py"
   check "loadtest unit tests (behaviour model)"       python3 -m unittest discover -s "$ROOT/loadtest/tests" -p 'test_humanlib.py'
+  check "loadtest unit tests (scenario builder, init)" python3 -m unittest discover -s "$ROOT/loadtest/tests" -p 'test_builder.py'
   if [[ "${PULSE_TEST_ENGINE:-0}" == "1" ]]; then
     check "loadtest engine tests (real Locust, mock CRM)" python3 -m unittest "$ROOT/loadtest/tests/test_engine.py"
   else
@@ -544,7 +561,7 @@ else
 fi
 
 echo "── syntax"
-for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/loadtest/run.sh "$ROOT"/scripts/*/*.sh; do
+for s in "$ROOT"/bootstrap.sh "$ROOT"/revert.sh "$ROOT"/crm.sh "$ROOT"/bin/pulse "$ROOT"/bin/pulse-lt "$ROOT"/scripts/vm-check.sh "$ROOT"/scripts/audit.sh "$ROOT"/scripts/retune.sh "$ROOT"/loadtest/run.sh "$ROOT"/scripts/*/*.sh; do
   check "bash -n ${s#"$ROOT"/}" bash -n "$s"
 done
 

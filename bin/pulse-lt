@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pulse-lt - load-test your own software with human-like traffic
+#
+#   pulse-lt init                          answer a few questions, get a scenario file
+#   pulse-lt init --from-urls urls.txt     ... or build it from a list of paths
+#   pulse-lt init --from-har app.har       ... or from a browser recording
+#   pulse-lt check my-app.json             validate it, send nothing
+#   pulse-lt run   my-app.json --users 50  run it and print a verdict
+#   pulse-lt report                        show the last verdict again
+#
+# Run it from a machine other than the one being tested. Details: docs/load-testing.md
+# =============================================================================
+set -Eeuo pipefail
+SELF="${BASH_SOURCE[0]}"
+while [[ -L "$SELF" ]]; do # follow symlinks (for example /usr/local/bin/pulse-lt)
+  dir="$(cd "$(dirname "$SELF")" && pwd)"; SELF="$(readlink "$SELF")"; [[ "$SELF" == /* ]] || SELF="$dir/$SELF"
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+LT="$ROOT/loadtest"
+
+die() { printf 'pulse-lt: %s\n' "$*" >&2; exit 1; }
+
+find_python() { # sets PY: python3 on Linux/macOS, python or the py launcher on Windows; 3.9 or newer
+  PY=()
+  local candidate probe
+  for candidate in "${PYTHON:-}" python3 python py; do
+    if [[ -z "$candidate" ]] || ! command -v "$candidate" >/dev/null 2>&1; then continue; fi
+    probe=("$candidate"); [[ "$candidate" != "py" ]] || probe=(py -3)
+    if "${probe[@]}" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then PY=("${probe[@]}"); return 0; fi
+  done
+  die "Python 3.9 or newer was not found (tried python3, python, py). Install it and put it on PATH."
+}
+
+usage() {
+  cat <<'USAGE'
+pulse-lt - load-test your own software with human-like traffic
+
+COMMANDS
+  init [options]            write a scenario file describing what your users do
+      (no options)            ask questions: address, website or API, sign-in, pages
+      --from-urls FILE        one path or URL per line; a blank line starts a new visit
+      --from-har FILE         a browser recording (DevTools > Network > Save all as HAR)
+      --url ADDRESS --name NAME --out FILE --force
+      --login PATH [--user-field F --pass-field F --token-path P]   sign-in endpoint (with --from-urls)
+      --kind web|api          with --from-urls: fetch scripts and styles for pages, or not
+  check SCENARIO [options]  validate the scenario and show the plan; sends nothing
+  run SCENARIO [options]    run the load test and print a verdict (exit 0 = pass, 1 = fail)
+  report [DIR]              print the verdict of the last (or a given) run again
+  help                      this text
+
+COMMON OPTIONS FOR check AND run
+  --url ADDRESS             the site to test (scenarios from 'init' remember it)
+  --users N                 normal number of people on the site at once (default 20)
+  --profile NAME            smoke | average | peak | spike | soak | breakpoint (default average)
+  --hold SECONDS            how long to hold the load (default 600)
+  --username U --password-file F   sign-in used by a scenario that logs in
+  --token-file F            send "Authorization: Bearer <token>" with every request
+  --header "Name: value"    extra header on every request (repeatable)
+  --max-fail 0.01           fail the run above this share of failed requests
+  --p95-ms 1500             fail the run when any endpoint's p95 is slower than this
+  --writes                  also run steps that create or change data (test systems only)
+  --yes                     skip the "type the target's name" confirmation (automation)
+  Everything else is in:  bash loadtest/run.sh --help
+
+You may only generate load against systems you own or have written permission to test.
+USAGE
+}
+
+cmd="${1:-help}"; [[ $# -eq 0 ]] || shift
+case "$cmd" in
+  init)
+    find_python
+    exec "${PY[@]}" "$LT/init.py" "$@"
+    ;;
+  check | run)
+    [[ $# -ge 1 && "$1" != -* ]] || die "$cmd needs a scenario file, for example: pulse-lt $cmd my-app.json"
+    scenario="$1"; shift
+    extra=()
+    [[ "$cmd" == "run" ]] || extra=(--check)
+    exec bash "$LT/run.sh" --scenario "$scenario" ${extra[@]+"${extra[@]}"} "$@"
+    ;;
+  report)
+    find_python
+    exec "${PY[@]}" "$LT/report.py" "$@"
+    ;;
+  help | -h | --help) usage ;;
+  *) usage >&2; die "unknown command '$cmd'" ;;
+esac
