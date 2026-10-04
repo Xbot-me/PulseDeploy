@@ -50,6 +50,11 @@ P95_MS = env_num("LT_P95_MS", 1500)  # slowest acceptable p95 of any endpoint
 TIME_SCALE = env_num("LT_TIME_SCALE", 1.0)  # <1 shortens every human pause (tests, or a harsher "fast clicker" run)
 BASES = {k[8:].lower(): v.rstrip("/") for k, v in os.environ.items() if k.startswith("LT_BASE_") and v}
 HOST_HEADERS = {k[11:].lower(): v for k, v in os.environ.items() if k.startswith("LT_HOSTHDR_") and v}
+GLOBAL_HEADERS = {}  # --header / --token-file: sent with every request
+for _line in env("LT_HEADERS", "").splitlines():
+    _name, _, _value = _line.partition(":")
+    if _name.strip() and _value.strip():
+        GLOBAL_HEADERS[_name.strip()] = _value.strip()
 RUN_VARS = {k[7:].lower(): v for k, v in os.environ.items() if k.startswith("LT_VAR_") and v}
 
 SHARE_LOGIN = env("LT_SHARE_LOGIN", "1") == "1"  # people on one account log in once and share the session
@@ -77,7 +82,9 @@ _USER_INDEX = count(1)
 # ── scenarios ─────────────────────────────────────────────────────────────────
 def load_scenarios():
     chosen = []
-    for item in env("LT_SCENARIO", "aventech-admin:1").split(","):
+    if not env("LT_SCENARIO"):
+        sys.exit("LT_SCENARIO is not set; run this through run.sh or pulse-lt")
+    for item in env("LT_SCENARIO").split(","):
         name, _, weight = item.strip().partition(":")
         path = Path(name) if Path(name).exists() else HERE / "scenarios" / f"{name}.json"
         scn = hl.load_scenario(path)
@@ -103,6 +110,8 @@ class HumanUser(HttpUser):
         self.ua = self.rng.choice(hl.UA_POOL)
         self.cached = set()
         self.ready = False
+        # values read at login (a token) belong to the signed-in session, not to one visit
+        self.login_vars = {k for st in self.scenario.get("setup", []) for k in st.get("extract", {})} | {"username", "email", "password"}
 
     def pause(self, spec):
         return hl.think_time(self.rng, spec) * TIME_SCALE
@@ -117,6 +126,7 @@ class HumanUser(HttpUser):
         }
         if MARK:
             headers["X-Load-Test"] = RUN_ID
+        headers.update(GLOBAL_HEADERS)
         if host in HOST_HEADERS:
             headers["Host"] = HOST_HEADERS[host]
         for source in (scn.get("headers", {}).get(host, {}), step.get("headers", {})):
@@ -216,7 +226,7 @@ class HumanUser(HttpUser):
         """Everyone on the same account reuses the first person's session.
 
         The server does the same work for each request either way; this only avoids
-        hammering the login route, which the CRM throttles per account (5 a minute)."""
+        hammering the login route, which many apps throttle per account."""
         key = self.scenario["name"]
         with _SHARED_LOGIN["lock"]:
             state = _SHARED_LOGIN["state"].get(key)
@@ -235,6 +245,7 @@ class HumanUser(HttpUser):
     def setup_login(self):
         if ACCOUNTS:
             self.vars["email"], self.vars["password"] = ACCOUNTS[next(_ACCOUNT_INDEX) % len(ACCOUNTS)]
+            self.vars["username"] = self.vars["email"]
         for step in self.scenario.get("setup", []):
             if step.get("login") and SHARE_LOGIN and not ACCOUNTS:
                 outcome = self.shared_login(step)
@@ -290,7 +301,7 @@ class HumanUser(HttpUser):
         gevent.sleep(self.pause(session.get("gap", {"median": 45, "sigma": 0.8, "min": 5, "max": 600})))
         if self.rng.random() < 0.7:
             for key in list(self.vars):
-                if key not in RUN_VARS and key not in scn.get("keep_vars", []):
+                if key not in RUN_VARS and key not in scn.get("keep_vars", []) and key not in self.login_vars:
                     del self.vars[key]
             self.cached.clear()
 
@@ -331,6 +342,7 @@ class ProfileShape(LoadTestShape):
         self.max_users = int(env_num("LT_MAX_USERS", 400))
         self.mark = {"requests": 0, "failures": 0, "step": -1}
         self.breakpoint = None
+        self.peak_seen = 0
         self.stages = self.build_stages()
 
     def ramp(self, users):
@@ -360,6 +372,12 @@ class ProfileShape(LoadTestShape):
         return sum(e.num_requests for e in entries), sum(e.num_failures for e in entries)
 
     def tick(self):
+        result = self._tick()
+        if result:
+            self.peak_seen = max(self.peak_seen, result[0])
+        return result
+
+    def _tick(self):
         now = self.get_run_time()
         if self.profile != "breakpoint":
             for end, users, rate in self.stages:
@@ -425,6 +443,28 @@ def print_verdict(**_):
         print(text, flush=True)
 
 
+def plain_english(rows, total, ratio, peak, broke, profile, problems):
+    """A few sentences a non-specialist can act on."""
+    out = []
+    busy = [r for r in rows if r["requests"] >= 20]
+    if profile == "breakpoint" and broke:
+        out.append(f"What this means: it held up to about {max(broke[0] - 1, 0)} people at once and went past your limits at {broke[0]}.")
+    elif peak and not problems:
+        out.append(f"What this means: with up to {peak} people at once it stayed within your limits "
+                   f"({100 * ratio:.2f}% failures, slowest p95 {max((r['p95_ms'] for r in busy), default=0):.0f} ms).")
+    elif peak:
+        out.append(f"What this means: with up to {peak} people at once it went past your limits.")
+    slow = sorted(busy, key=lambda r: -r["p95_ms"])[:3]
+    if slow:
+        out.append("Slowest: " + "; ".join(f"{r['name']} (p95 {r['p95_ms']:.0f} ms)" for r in slow))
+    bad = sorted((r for r in rows if r["failures"]), key=lambda r: -r["failures"])[:3]
+    if bad:
+        out.append("Failing: " + "; ".join(f"{r['name']} ({r['failures']} of {r['requests']})" for r in bad))
+    if problems:
+        out.append("Next: look at the server during a run (CPU, memory, database, logs) for the slowest or failing endpoint above, fix it, then run again.")
+    return out
+
+
 @events.quitting.add_listener
 def verdict(environment, **_):
     entries = [e for e in environment.stats.entries.values()]
@@ -455,14 +495,16 @@ def verdict(environment, **_):
     lines.append(f"{total} requests, {failed} failed ({100 * ratio:.2f}%), slowest endpoint p95 {worst:.0f} ms")
     if broke and getattr(shape, "profile", "") == "breakpoint":
         lines.append(f"BREAKPOINT: the limits were first exceeded at {broke[0]} concurrent users")
+    lines += plain_english(rows, total, ratio, getattr(shape, "peak_seen", 0), broke, getattr(shape, "profile", ""), problems)
     lines.append("RESULT: " + ("PASS" if not problems else "FAIL - " + "; ".join(problems)))
-    VERDICT_TEXT.append("\n".join(lines))
+    text = "\n".join(lines)
+    VERDICT_TEXT.append(text)
     out = env("LT_OUT")
     if out:
         Path(out).mkdir(parents=True, exist_ok=True)
         summary = {"run": RUN_ID, "seed": SEED, "total": total, "failed": failed, "worst_p95_ms": worst,
                    "limits": {"max_fail": MAX_FAIL, "p95_ms": P95_MS}, "problems": problems, "endpoints": rows,
-                   "breakpoint_users": broke[0] if broke else None}
+                   "breakpoint_users": broke[0] if broke else None, "text": text}
         (Path(out) / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     # Locust would exit 1 on any failed request, including rate-limited logins that the
     # verdict deliberately ignores; the verdict alone decides the exit code.
