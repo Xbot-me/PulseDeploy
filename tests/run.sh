@@ -531,6 +531,14 @@ check     "smoke: healthy install passes (name not checked)"   sc ok 0
 check_not "smoke: unreadable tenant database fails"            sc dbdown 0
 check_not "smoke: refused admin login fails"                   sc badlogin 0
 check_not "smoke: inactive scheduler timer fails"              sc ok 0 inactive
+echo "── crm.sh: store:provision step (fake artisan)"
+st() { bash "$ROOT/tests/store_case.sh" "$@"; }
+check "store: created, credentials 0600, password by file, no leak" st created
+check "store: operator-supplied password is kept"                  st supplied
+check "store: --catalog/--demo/--vertical are passed through"      st catalog
+check "store: existing store is left alone, no credentials"        st exists
+check "store: a refusal fails the run and shows the message"       st refused
+check "store: a crash fails the run"                               st crash
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
 check_not "seed.sh rejects an unknown flag"           bash "$ROOT/loadtest/seed/seed.sh" --store t --bogus

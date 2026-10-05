@@ -27,6 +27,7 @@ SF_BUILD_ENV_CLI=(); SF_RUNTIME_ENV_CLI=()
 DOMAIN=""; EMAIL=""; API_HOST=""; ADMIN_HOST=""; SHOP_HOST=""; SCHEME=""
 CLOUDFLARE=0; CERTBOT=0; APP_USER="deploy"; APP_NAME=""
 STORE=""; STORE_NAME=""; ADMIN_EMAIL=""; ADMIN_PASSWORD=""
+CATALOG="starter"; DEMO=""; VERTICAL=""
 GIT_TOKEN_FILE=""; GIT_SSH_KEY=""; REGISTRY_DIR=""
 SKIP_SERVER=0; CHECK_ONLY=0; DRY_RUN=0; ASSUME_YES=0; RESET_ENV=0; ONLY=""
 BOOTSTRAP_ARGS=()
@@ -125,6 +126,9 @@ parse_args() {
       --admin-email)           need_value "$@"; ADMIN_EMAIL="$2"; shift 2 ;;
       --admin-password)        need_value "$@"; ADMIN_PASSWORD="$2"; shift 2 ;;
       --app-name)              need_value "$@"; APP_NAME="$2"; shift 2 ;;
+      --catalog)               need_value "$@"; CATALOG="$2"; shift 2 ;;
+      --demo)                  need_value "$@"; DEMO="$2"; shift 2 ;;
+      --vertical)              need_value "$@"; VERTICAL="$2"; shift 2 ;;
       --crm)                   need_value "$@"; CRM_ID="$2"; shift 2 ;;
       --crm-repo)              need_value "$@"; CRM_REPO_OVERRIDE="$2"; shift 2 ;;
       --crm-ref)               need_value "$@"; CRM_REF_OVERRIDE="$2"; shift 2 ;;
@@ -195,7 +199,7 @@ load_definitions() {
   local file
   file="$(find_def crm "$CRM_ID")" || error "Unknown CRM '$CRM_ID' (definitions: $(for f in "$ROOT"/apps/crm/*.conf; do basename "$f" .conf; done | tr '\n' ' '))"
   registry_load "$file" CD \
-    "NAME REPO REF BACKEND_DIR ADMIN_DIR DB_NAME DB_USER TENANT_DB_PREFIX STORE_EXISTS_TEXT ADMIN_LOGIN_PATH ADMIN_LOGIN_HEADER SMOKE_INFO_PATH SMOKE_STORE_NAME" \
+    "NAME REPO REF BACKEND_DIR ADMIN_DIR DB_NAME DB_USER TENANT_DB_PREFIX STORE_EXISTS_TEXT ADMIN_LOGIN_PATH ADMIN_LOGIN_HEADER SMOKE_INFO_PATH SMOKE_STORE_NAME STORE_JSON" \
     "SERVER_OPT BACKEND_ENV ADMIN_BUILD_ENV ADMIN_RUNTIME_ENV STORE_ARG"
   [[ -z "$CRM_REPO_OVERRIDE" ]] || CD_REPO="$CRM_REPO_OVERRIDE"
   [[ -z "$CRM_REF_OVERRIDE" ]]  || CD_REF="$CRM_REF_OVERRIDE"
@@ -251,7 +255,12 @@ validate_options() {
   [[ -z "$STORE" ]] || valid_slug "$STORE" || error "Invalid --store '$STORE' (lowercase letters, digits, - and _)"
   [[ -z "$STORE_NAME" || "$STORE_NAME" =~ ^[^[:cntrl:]]{1,80}$ ]] || error "Invalid --store-name"
   [[ -z "$ADMIN_EMAIL" ]] || valid_email "$ADMIN_EMAIL" || error "Invalid --admin-email '$ADMIN_EMAIL'"
-  [[ -z "$ADMIN_PASSWORD" || ${#ADMIN_PASSWORD} -ge 10 ]] || error "--admin-password must be at least 10 characters"
+  [[ -z "$ADMIN_PASSWORD" || ${#ADMIN_PASSWORD} -ge 12 ]] || error "--admin-password must be at least 12 characters"
+  [[ "$CATALOG" =~ ^(none|starter|demo)$ ]] || error "--catalog must be none, starter or demo"
+  [[ "$CATALOG" != "demo" || -n "$DEMO" ]] || error "--catalog demo needs --demo <slug>"
+  [[ "$CATALOG" == "demo" || -z "$DEMO" ]] || error "--demo only goes with --catalog demo"
+  [[ -z "$DEMO" || "$DEMO" =~ ^[a-z0-9-]{1,40}$ ]] || error "Invalid --demo '$DEMO'"
+  [[ -z "$VERTICAL" || "$VERTICAL" =~ ^[a-z0-9_-]{1,40}$ ]] || error "Invalid --vertical '$VERTICAL'"
   [[ -z "$CRM_REPO_OVERRIDE" ]] || valid_git_url "$CRM_REPO_OVERRIDE" || error "Invalid --crm-repo"
   local r
   for r in "$CRM_REF_OVERRIDE" "$SF_REF_OVERRIDE"; do [[ -z "$r" ]] || valid_ref "$r" || error "Invalid git ref '$r'"; done
@@ -275,6 +284,9 @@ setup_vars() {
   STORE_NAME="${STORE_NAME:-My Store}"
   ADMIN_EMAIL="${ADMIN_EMAIL:-admin@${DOMAIN}}"
   APP_NAME="${APP_NAME:-$CD_NAME}"
+  if [[ "${CD_STORE_JSON:-0}" == "1" && ! "$STORE" =~ ^[a-z][a-z0-9-]{1,39}$ ]]; then
+    error "--store '$STORE': use 2 to 40 lower-case letters, digits and dashes, starting with a letter (the store:provision rule)."
+  fi
   API_HOST="${API_HOST:-api.${DOMAIN}}"
   ADMIN_HOST="${ADMIN_HOST:-admin.${DOMAIN}}"
   SHOP_HOST="${SHOP_HOST:-${DOMAIN}}"
@@ -418,27 +430,68 @@ step_storefront() {
 }
 
 CREDS_FILE="/root/pulsedeploy-crm-credentials.txt"
-step_store() {
-  section "First store"
-  local generated=0
-  if [[ -z "$ADMIN_PASSWORD" ]]; then ADMIN_PASSWORD="$(generate_password 20)"; generated=1; fi
-  CRM_VARS[ADMIN_PASSWORD]="$ADMIN_PASSWORD"
-  local -a sargs=() a rc=0
-  for a in "${CD_STORE_ARG[@]}"; do sargs+=("$(crm_expand "$a")"); done
-  [[ ${#sargs[@]} -gt 0 ]] || { warn "The CRM definition has no STORE_ARG; skipping store creation."; unset 'CRM_VARS[ADMIN_PASSWORD]'; return 0; }
-  crm_store_create "$CRM_PHP_BIN" "$CD_STORE_EXISTS_TEXT" "${sargs[@]}" || rc=$?
-  case "$rc" in
-    0)
-      (umask 077; cat >"$CREDS_FILE" <<EOF
+
+write_credentials() {
+  (umask 077; cat >"$CREDS_FILE" <<EOF
 # PulseDeploy CRM credentials (root only). Change the password after first login.
 store:    ${STORE_NAME} (${STORE})
 admin:    ${SCHEME}://${ADMIN_HOST}
 email:    ${ADMIN_EMAIL}
 password: ${ADMIN_PASSWORD}
 EOF
-      )
-      log "Store '${STORE}' created. Admin login saved to ${CREDS_FILE}"
+  )
+  log "Store '${STORE}' created. Admin login saved to ${CREDS_FILE}"
+}
+
+# store:provision (production): password through a temp file, one JSON object back
+step_store_json() {
+  local generated=0 pwfile rc=0 status msg
+  if [[ -z "$ADMIN_PASSWORD" ]]; then ADMIN_PASSWORD="$(generate_password 20)"; generated=1; fi
+  CRM_VARS[ADMIN_PASSWORD]="$ADMIN_PASSWORD"
+  pwfile="$(mktemp /tmp/pulse-owner-pw.XXXXXX)"
+  chmod 600 "$pwfile"; chown "$APP_USER" "$pwfile"
+  printf '%s' "$ADMIN_PASSWORD" >"$pwfile"
+  CRM_VARS[PASSWORD_FILE]="$pwfile"
+  local -a sargs=() a
+  for a in "${CD_STORE_ARG[@]}"; do sargs+=("$(crm_expand "$a")"); done
+  sargs+=("--catalog=${CATALOG}")
+  [[ -z "$DEMO" ]] || sargs+=("--demo=${DEMO}")
+  [[ -z "$VERTICAL" ]] || sargs+=("--vertical=${VERTICAL}")
+  crm_artisan_json "$CRM_PHP_BIN" "${sargs[@]}" || rc=$?
+  rm -f -- "$pwfile"; unset 'CRM_VARS[PASSWORD_FILE]'
+  status="$(jq -r '.status // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  msg="$(jq -r '.message // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  case "${rc}:${status}" in
+    0:created)
+      local given
+      given="$(jq -r '.admin_password // empty' <<<"$CRM_JSON_OUT")"
+      [[ -z "$given" ]] || ADMIN_PASSWORD="$given"
+      write_credentials
+      log "Catalog: $(jq -r '"\(.catalog): \(.categories) categories, \(.products) products"' <<<"$CRM_JSON_OUT")"
       ;;
+    2:exists)
+      info "Store '${STORE}' already exists; leaving it and its credentials as they are."
+      [[ "$generated" -eq 0 ]] || ADMIN_PASSWORD=""
+      ;;
+    *)
+      [[ -z "$CRM_JSON_ERR" ]] || printf '%s\n' "$CRM_JSON_ERR" | tail -n 8 >&2
+      error "Store provisioning failed (exit ${rc}): ${msg:-no JSON answer from the command}"
+      ;;
+  esac
+}
+
+step_store() {
+  section "First store"
+  [[ ${#CD_STORE_ARG[@]} -gt 0 ]] || { warn "The CRM definition has no STORE_ARG; skipping store creation."; return 0; }
+  if [[ "${CD_STORE_JSON:-0}" == "1" ]]; then step_store_json; return 0; fi
+  local generated=0
+  if [[ -z "$ADMIN_PASSWORD" ]]; then ADMIN_PASSWORD="$(generate_password 20)"; generated=1; fi
+  CRM_VARS[ADMIN_PASSWORD]="$ADMIN_PASSWORD"
+  local -a sargs=() a rc=0
+  for a in "${CD_STORE_ARG[@]}"; do sargs+=("$(crm_expand "$a")"); done
+  crm_store_create "$CRM_PHP_BIN" "$CD_STORE_EXISTS_TEXT" "${sargs[@]}" || rc=$?
+  case "$rc" in
+    0) write_credentials ;;
     2)
       info "Store '${STORE}' already exists; leaving it as it is."
       [[ "$generated" -eq 0 ]] || ADMIN_PASSWORD=""

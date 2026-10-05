@@ -70,7 +70,8 @@ done
 ((ORDERS >= 10 && ORDERS <= MAX_ORDERS)) || error "--orders must be 10..$MAX_ORDERS"
 ((MONTHS >= 1 && MONTHS <= 60)) || error "--months must be 1..60"
 
-DB="zymerce_tenant_${STORE//-/_}"
+# store:provision names the database aventech_tenant_<slug>; older installs used zymerce_tenant_<slug>
+DB="aventech_tenant_${STORE//-/_}"
 
 # The live store must never be seeded.
 LIVE=""
@@ -103,18 +104,34 @@ fi
 
 db_exists() { [[ -n "$("${MYSQL[@]}" -N -e "SELECT 1 FROM information_schema.schemata WHERE schema_name='$DB'")" ]]; }
 
+if [[ "$CREATE_STORE" -eq 0 ]] && ! db_exists; then
+  legacy="zymerce_tenant_${STORE//-/_}"
+  if [[ -n "$("${MYSQL[@]}" -N -e "SELECT 1 FROM information_schema.schemata WHERE schema_name='$legacy'")" ]]; then DB="$legacy"; fi
+fi
+
 if [[ "$CREATE_STORE" -eq 1 ]]; then
   db_exists && error "Store '$STORE' already exists; drop --create-store to use it."
   [[ -r /etc/pulsedeploy/pulse.conf ]] || error "No /etc/pulsedeploy/pulse.conf: the CRM is not installed here."
+  command -v jq >/dev/null || error "jq is required (sudo apt install jq / sudo dnf install jq)."
   # shellcheck source=/dev/null
   source /etc/pulsedeploy/pulse.conf
   # shellcheck source=scripts/lib/crm.sh
   source "$ROOT/scripts/lib/crm.sh"
   APP_USER="${APP_USER:-deploy}"
   PASS="$(generate_password 20)"
-  info "Creating store '$STORE'..."
-  crm_store_create "${PHP_BIN:-php}" "already provisioned" store:create "Load Test" "$STORE" \
-    "--email=$ADMIN_EMAIL" "--password=$PASS" || { rc=$?; [[ $rc -eq 2 ]] && error "Store already exists."; error "store:create failed."; }
+  PWFILE="$(mktemp /tmp/pulse-owner-pw.XXXXXX)"
+  trap 'rm -f -- "$PWFILE"' EXIT
+  chmod 600 "$PWFILE"; chown "$APP_USER" "$PWFILE"
+  printf '%s' "$PASS" >"$PWFILE"
+  declare -A CRM_VARS=([ADMIN_PASSWORD]="$PASS")
+  info "Creating store '$STORE' (store:provision, no catalog)..."
+  rc=0
+  crm_artisan_json "${PHP_BIN:-php}" store:provision "Load Test" "$STORE" \
+    "--owner-email=$ADMIN_EMAIL" "--password-file=$PWFILE" --catalog=none --json || rc=$?
+  rm -f -- "$PWFILE"
+  status="$(jq -r '.status // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  msg="$(jq -r '.message // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  [[ "$rc:$status" == "0:created" ]] || error "store:provision failed (exit $rc): ${msg:-no JSON answer}${CRM_JSON_ERR:+ / ${CRM_JSON_ERR##*$'\n'}}"
   umask 077
   printf 'store=%s\nemail=%s\npassword=%s\n' "$STORE" "$ADMIN_EMAIL" "$PASS" >"$CRED_FILE"
   log "Admin login saved to $CRED_FILE (mode 600)."
