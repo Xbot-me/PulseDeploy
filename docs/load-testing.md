@@ -179,7 +179,17 @@ The same `--seed` gives the same data. 100,000 orders load in about 10 seconds a
 | 30,000 | 8.6 s | 8.0 s |
 | 100,000 | times out (30 s PHP limit) | times out |
 
-The cause is in the application, not the server: `OrderController::index` runs `(clone $query)->get()` to
+**Re-measured after the CRM's later update (commit 7061883), same machine and method:**
+
+| Orders in the store | `GET /admin/orders` | `GET /admin/dashboard` |
+|---|---|---|
+| 30,000 | 0.29 s | 0.44 s |
+| 100,000 | 1.07 s | 2.24 s |
+
+No more timeouts, and 30,000 orders went from about 8 s to under half a second. At 100,000 orders both are
+still above a 500 ms target. The text below describes the original cause.
+
+The cause was in the application, not the server: `OrderController::index` runs `(clone $query)->get()` to
 build its summary, which loads **every** order with its lines and payments into PHP before paginating. Tuning
 PHP, MySQL or Redis does not fix that; the summary needs SQL aggregates. Check this with a seeded store
 before trusting a result from an empty one.
