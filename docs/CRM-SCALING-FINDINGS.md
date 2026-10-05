@@ -141,3 +141,35 @@ limit (1500 ms default) with the seeded store. The earlier breakpoint run only l
   `last_used_at` UPDATE. A cache for the store lookup and dropping the `last_used_at` write were tried on a
   branch and made no measurable difference; do not spend more time there.
 - The nginx admin-host login path (`/api/auth/login`) has no `limit_req` (the API host has one). Hardening item, in PulseDeploy.
+
+## 6. Measured under load (benchmark L-002, 2 vCPU / 4 GB, Amazon Linux 2023, small dataset)
+
+Run: `loadtest/run.sh --profile breakpoint --time-scale 0.25` against the `small` profile (10,000 orders, 100,000
+behaviour events), up to 150 virtual staff acting four times faster than a person (roughly 600 ordinary staff), about
+28 minutes, rate limits lifted with `pulse-lt throttles off`. Result: **PASS**, 54,598 requests, 0 failures, slowest
+endpoint p95 670 ms (admin dashboard), so no breakpoint was found. Server side (`pulse-lt record`):
+
+* CPU averaged 25% and **peaked at 97%** (2 vCPU, load average 4.6). Memory peaked at 1.3 GB of 3.9 GB, no swap, no disk
+  I/O wait, InnoDB buffer pool hit ratio 1.0. The PHP pool reached its 12-worker cap (13 processes, 456 MB).
+* nginx request time, API (loopback, what the admin and storefront call): p50 86 ms, p95 329 ms, p99 620 ms.
+* MariaDB ran 396,473 queries, **611 slower than 200 ms, and the five worst are the same query** (0.59 to 0.71 s each):
+
+```sql
+select product_id, sum(qty) as total_units from `ordered_products`
+where exists (select * from `orders` where `ordered_products`.`order_id` = `orders`.`id` and ...live...)
+  and `is_gift` = 0 group by `product_id` order by `total_units` desc limit 5
+```
+
+  This is `DashboardController` "Top selling products" (`OrderedProduct::...->whereHas('order', fn ($q) => $q->live())`).
+  The same file's `total_purchased_unit` sum uses the same `whereHas`. A correlated `EXISTS` per `ordered_products` row
+  is what costs the time, and it grows with the table (the dashboard took 3.5 to 4.5 s per request with 200,000 orders).
+* **Redis saw 657 commands in 53 minutes and 3 hits**: the admin endpoints are not cached at all.
+
+Suggested next changes (each measurable with the same benchmark):
+
+1. Rewrite both dashboard aggregates as a join: `ordered_products` JOIN `orders` ON orders.id = ordered_products.order_id
+   WHERE orders.<live conditions> AND ordered_products.is_gift = 0 GROUP BY product_id, and make sure
+   `ordered_products(order_id, product_id, qty)` is covered by an index (check with EXPLAIN on the `medium` profile).
+2. Cache the whole dashboard payload per store for 30 to 60 seconds (Redis is deployed and idle). With 20 or more staff
+   opening the dashboard, every one of them currently runs these queries.
+3. Re-run the same benchmark on the `medium` profile (200,000 orders) and compare with `pulse-lt diff`.
