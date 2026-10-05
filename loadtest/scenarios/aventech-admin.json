@@ -8,7 +8,8 @@
     "journeys": { "median": 3, "sigma": 0.5, "min": 1, "max": 8 },
     "gap": { "median": 90, "sigma": 0.8, "min": 10, "max": 900 }
   },
-  "shared": { "search_terms": ["shirt", "bag", "shoe", "watch", "dress", "belt"] },
+  "shared": { "search_terms": ["shirt", "bag", "shoe", "watch", "dress", "belt"],
+              "order_statuses": ["Pending", "Confirmed", "Delivered", "Cancelled", "In-Courier"] },
   "setup": [
     { "name": "page: login", "host": "admin", "path": "/login", "html": true, "assets": true, "think": { "median": 4, "sigma": 0.5, "max": 15 } },
     { "name": "api: login", "login": true, "host": "admin", "method": "POST", "path": "/api/auth/login",
@@ -28,8 +29,8 @@
     { "name": "work through orders", "weight": 6, "steps": [
       { "name": "page: orders", "host": "admin", "path": "/orders", "html": true, "assets": true, "think": { "median": 1.5, "sigma": 0.4, "max": 6 } },
       { "name": "api: orders list", "host": "admin", "path": "/api/proxy/orders?per_page=20",
-        "extract": { "order_id": { "path": "data.data[*].id", "pick": "random" } }, "think": { "median": 10, "sigma": 0.7, "max": 90 } },
-      { "name": "api: order detail", "host": "admin", "path": "/api/proxy/orders/{order_id}", "continue_p": 0.6, "think": { "median": 12, "sigma": 0.7, "max": 120 } },
+        "think": { "median": 10, "sigma": 0.7, "max": 90 } },
+      { "name": "api: orders by status", "host": "admin", "path": "/api/proxy/orders?per_page=20&status={any:order_statuses}", "continue_p": 0.6, "think": { "median": 12, "sigma": 0.7, "max": 120 } },
       { "name": "api: orders list page 2", "host": "admin", "path": "/api/proxy/orders?per_page=20&page=2", "expect": [200, 404] }
     ] },
     { "name": "browse the catalogue", "weight": 4, "steps": [
