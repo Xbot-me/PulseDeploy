@@ -7,7 +7,7 @@
 #
 # Run it ON the server (it talks to the local database). It only ever touches a
 # store that holds no real data, and never the live store from /etc/pulsedeploy/crm.conf.
-# Everything it adds is marked, so --purge removes exactly that. Details: docs/load-testing.md
+# Everything it adds is marked, so --purge removes exactly that. Details: README, "Load testing and benchmarks"
 # =============================================================================
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
