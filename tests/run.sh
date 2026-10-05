@@ -539,6 +539,22 @@ check "store: --catalog/--demo/--vertical are passed through"      st catalog
 check "store: existing store is left alone, no credentials"        st exists
 check "store: a refusal fails the run and shows the message"       st refused
 check "store: a crash fails the run"                               st crash
+echo "── laravel-next: the app owns the whole storage tree"
+(
+  if [[ $EUID -ne 0 ]] || ! getent group daemon >/dev/null 2>&1; then echo "  skip (needs root)"; exit 0; fi
+  STG="$(mktemp -d -p /tmp)"; trap 'rm -rf "${STG:?}"' EXIT
+  chmod 755 "$STG"
+  APP_USER=daemon; LNX_APPS_ROOT="$STG"; LNX_ETC="$STG/etc"
+  # shellcheck source=/dev/null
+  source <(awk '/^lnx_create_dirs\(\) \{/{p=1} p{print} p&&/^}$/{exit}' "$ROOT/scripts/stacks/laravel_next.sh")
+  lnx_create_dirs >/dev/null 2>&1
+  bad="$(find "$STG/api/shared" ! -user daemon 2>/dev/null | head -3)"
+  [[ -z "$bad" ]] || { echo "not owned by the app user: $bad" >&2; exit 1; }
+  # shellcheck disable=SC2016  # the inner bash expands $1
+  sudo_probe="$(runuser -u daemon -- bash -c 'touch "$1/api/shared/storage/app/probe" && echo ok' _ "$STG" 2>&1)"
+  [[ "$sudo_probe" == ok ]] || { echo "app user cannot write storage/app" >&2; exit 1; }
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "storage tree owned by the app user (or skipped without root)"; else bad "storage tree ownership"; fi
 echo "── pulse-lt: throttles, seed, record diff (fake artisan)"
 lt() { bash "$ROOT/tests/lt_case.sh" "$@"; }
 check "pulse-lt: throttles off/on restores .env byte for byte"   lt cycle
