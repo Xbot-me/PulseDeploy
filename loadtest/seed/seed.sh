@@ -16,7 +16,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 source "$ROOT/scripts/lib/common.sh"
 
 STORE=""; PRODUCTS=5000; CUSTOMERS=20000; ORDERS=100000; MONTHS=12; SEED=1
-CREATE_STORE=0; PURGE=0; ASSUME_YES=0; DRY_RUN=0
+CREATE_STORE=0; PURGE=0; ASSUME_YES=0; DRY_RUN=0; NO_DATA=0
 MAX_PRODUCTS=200000; MAX_CUSTOMERS=1000000; MAX_ORDERS=1000000
 MYSQL=(mysql)
 ADMIN_EMAIL="lt@loadtest.test"
@@ -34,6 +34,8 @@ Usage: sudo bash loadtest/seed/seed.sh --store <slug> [options]
   --orders <n>          default 100000 (max 1000000)
   --months <n>          spread orders over this many months, default 12 (1-60)
   --seed <n>            same number, same data (default 1)
+  --no-data             with --create-store: only create the (empty, plan "loadtest") store,
+                        for the CRM's own seeder:  sudo pulse-lt seed <store> --profile medium
   --purge               remove everything this tool added, then stop
   --dry-run             show the plan and the disk estimate, change nothing
   --yes                 do not ask for confirmation
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --seed)         need_value "$@"; SEED="$2"; shift 2 ;;
     --create-store) CREATE_STORE=1; shift ;;
     --purge)        PURGE=1; shift ;;
+    --no-data)      NO_DATA=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     --yes|-y)       ASSUME_YES=1; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -61,6 +64,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$STORE" ]] || { usage >&2; error "--store is required"; }
+[[ "$NO_DATA" -eq 0 || "$CREATE_STORE" -eq 1 ]] || error "--no-data only goes with --create-store"
 [[ "$STORE" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || error "--store must be lower-case letters, digits and dashes"
 for pair in "products:$PRODUCTS" "customers:$CUSTOMERS" "orders:$ORDERS" "months:$MONTHS" "seed:$SEED"; do
   is_num "${pair#*:}" || error "--${pair%%:*} must be a whole number (got '${pair#*:}')"
@@ -127,7 +131,7 @@ if [[ "$CREATE_STORE" -eq 1 ]]; then
   info "Creating store '$STORE' (store:provision, no catalog)..."
   rc=0
   crm_artisan_json "${PHP_BIN:-php}" store:provision "Load Test" "$STORE" \
-    "--owner-email=$ADMIN_EMAIL" "--password-file=$PWFILE" --catalog=none --json || rc=$?
+    "--owner-email=$ADMIN_EMAIL" "--password-file=$PWFILE" --catalog=none --plan=loadtest --json || rc=$?
   rm -f -- "$PWFILE"
   status="$(jq -r '.status // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
   msg="$(jq -r '.message // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
@@ -135,6 +139,10 @@ if [[ "$CREATE_STORE" -eq 1 ]]; then
   umask 077
   printf 'store=%s\nemail=%s\npassword=%s\n' "$STORE" "$ADMIN_EMAIL" "$PASS" >"$CRED_FILE"
   log "Admin login saved to $CRED_FILE (mode 600)."
+  if [[ "$NO_DATA" -eq 1 ]]; then
+    log "Store '$STORE' is ready and empty. Fill it with:  sudo pulse-lt seed $STORE --profile small|medium|large"
+    exit 0
+  fi
 fi
 
 db_exists || error "Database $DB does not exist. Create the store first (--create-store)."

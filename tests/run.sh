@@ -539,8 +539,17 @@ check "store: --catalog/--demo/--vertical are passed through"      st catalog
 check "store: existing store is left alone, no credentials"        st exists
 check "store: a refusal fails the run and shows the message"       st refused
 check "store: a crash fails the run"                               st crash
+echo "── pulse-lt: throttles, seed, record diff (fake artisan)"
+lt() { bash "$ROOT/tests/lt_case.sh" "$@"; }
+check "pulse-lt: throttles off/on restores .env byte for byte"   lt cycle
+check "pulse-lt: an existing LOADTEST_MODE line is restored"     lt keeps-existing-mode
+check "pulse-lt: refuses a CRM without LOADTEST_MODE, no change"  lt old-crm
+check "pulse-lt: seed validates, refuses the live store, passes options" lt seed
+check "pulse-lt: diff lists only what changed"                   lt diff
+check "pulse-lt: usage and bad input"                            lt usage
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
+check_not "seed.sh --no-data needs --create-store"    bash "$ROOT/loadtest/seed/seed.sh" --store t --no-data --dry-run
 check_not "seed.sh rejects an unknown flag"           bash "$ROOT/loadtest/seed/seed.sh" --store t --bogus
 check_not "seed.sh rejects a bad store name"          bash "$ROOT/loadtest/seed/seed.sh" --store 'a;b' --dry-run
 check_not "seed.sh rejects a non-numeric count"       bash "$ROOT/loadtest/seed/seed.sh" --store t --orders many --dry-run
