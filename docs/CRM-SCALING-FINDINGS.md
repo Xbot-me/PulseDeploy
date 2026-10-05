@@ -173,3 +173,48 @@ Suggested next changes (each measurable with the same benchmark):
 2. Cache the whole dashboard payload per store for 30 to 60 seconds (Redis is deployed and idle). With 20 or more staff
    opening the dashboard, every one of them currently runs these queries.
 3. Re-run the same benchmark on the `medium` profile (200,000 orders) and compare with `pulse-lt diff`.
+
+## 7. Benchmark L-003: the `medium` dataset (200,000 orders, 500,000 order lines) breaks the order list at about 10 users
+
+Same server, same test as L-002 (breakpoint, `--time-scale 0.25`), only the data differs. The run ended at the first step:
+676 requests, 0 failed, but p95 17,000 ms (limit 1,500 ms). CPU reached 100% (load average 7.6), 81 temporary tables
+went to disk, and the nginx times for the loopback API were p50 4.5 s, p95 13.6 s. MariaDB: 4,346 queries, 496 slower
+than 200 ms, and the worst five (6.5 to 6.6 s each) are one query:
+
+```sql
+select COALESCE(SUM(qty), 0) AS units, COUNT(DISTINCT NULLIF(product_id, 0)) AS products
+from `ordered_products` where `order_id` in (select `orders`.`id` from `orders` where ...) and COALESCE(is_gift, 0) = 0
+```
+
+That is `OrderController::summarize()`, which runs on **every** `GET /admin/orders` (the list, page 2, each status filter)
+and issues three aggregates over the whole filtered set: totals, the lines query above, and a `GROUP BY customer_phone`
+for new vs repeat customers. The earlier rewrite (section 3.1) removed the timeouts but each list request still costs
+several CPU-seconds at this size.
+
+What I measured for it in isolation (sandbox, MariaDB 10.11, same `medium` data, warm cache, single caller, so a best case):
+
+| Variant | Time |
+|---|---|
+| lines query as the app issues it | 2.5 s |
+| same with a join instead of `IN (subselect)` | 2.3 s |
+| same with a covering index on `ordered_products(order_id, is_gift, product_id, qty)` | 0.8 to 1.3 s |
+| `GROUP BY customer_phone` (new vs repeat), plain | 1.05 s |
+| same with an index on `orders(order_visibility, customer_phone)` | 2.7 to 3.3 s (worse) |
+| orders count and sum with a covering index | 0.09 s |
+
+So indexes and a join roughly halve the lines query, do not help the phone grouping, and leave a list request at about
+1 to 2 s even for one user. On the VM, under concurrency, the same queries took 6.5 s. The cost is in computing the
+summary over 200,000 orders and 500,000 lines on every request, not in a missing index.
+
+Suggested change (CRM): stop computing the summary inline.
+
+1. Serve the summary separately (`GET /admin/orders/summary`, or a `?summary=0` flag on the list) so the table renders
+   immediately and the figures arrive when ready.
+2. Cache the summary per filter set in Redis for 30 to 60 s, with a version key bumped on order writes if exactness
+   matters. Redis recorded 113 commands during the whole run: it is idle.
+3. Keep the covering index on `ordered_products` (it helps whatever else is done) and use `is_gift = 0` (the column is
+   `NOT NULL DEFAULT 0`, so `COALESCE(is_gift, 0)` only prevents index use).
+4. Re-run benchmark L-003 after the change and compare with `pulse-lt diff`. Target: the list under 500 ms at p95 for 20
+   staff on the `medium` profile.
+
+The dashboard (p50 13 s in this run) has the same shape and needs the same treatment (cache the payload; section 6).
