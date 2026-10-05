@@ -129,7 +129,11 @@ cmd_seed() {
   out="$(artisan "${args[@]}" --env=staging)" || { printf '%s\n' "$out" >&2; die "loadtest:seed failed"; }
   jq -e . >/dev/null 2>&1 <<<"$out" || { printf '%s\n' "$out" >&2; die "loadtest:seed did not print JSON"; }
   jq -r '"seeded: \(.requested // . | tostring)  in \(.seconds // "?") s"' <<<"$out"
-  note "manifest: $API_CURRENT/storage/app/loadtest-dataset.json (attached to the next benchmark record)"
+  # Keep our own copy of the dataset description: the CRM writes its manifest with a silenced
+  # file_put_contents, which does nothing when storage/app is not writable.
+  install -d -m 700 "$LT_STATE"
+  (umask 077; printf '%s\n' "$out" >"$LT_STATE/dataset.json")
+  note "dataset description saved: $LT_STATE/dataset.json (attached to the next benchmark record)"
 }
 
 # ── throttles ─────────────────────────────────────────────────────────────────
@@ -258,8 +262,11 @@ commits_json() {
 }
 
 dataset_json() {
-  local f="$API_CURRENT/storage/app/loadtest-dataset.json"
-  if [[ -r "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then cat "$f"; else echo 'null'; fi
+  local f
+  for f in "$API_CURRENT/storage/app/loadtest-dataset.json" "$LT_STATE/dataset.json"; do
+    if [[ -r "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then cat "$f"; return 0; fi
+  done
+  echo 'null'
 }
 mode_json() {
   local out
@@ -340,7 +347,7 @@ cmd_record() {
       slow_file="$(awk -F'\t' '{print $3}' <<<"$slow_state")"
       datadir="$(mysql_q "SELECT @@datadir" || true)"
       [[ "$slow_file" == /* || -z "$slow_file" ]] || slow_file="${datadir%/}/$slow_file"
-      [[ -r "$API_CURRENT/storage/app/loadtest-dataset.json" ]] || warn "no dataset manifest at $API_CURRENT/storage/app/loadtest-dataset.json (run 'pulse-lt seed' first, or the record will say 'none recorded')"
+      [[ "$(dataset_json)" != null ]] || warn "no dataset description found (run 'pulse-lt seed' first, or the record will say 'none recorded')"
       mysql_status_json >"$dir/mysql.start.json"
       redis_info_json >"$dir/redis.start.json"
       jq -n --arg id "$id" --arg note "$note" --arg at "$(date -u +%FT%TZ)" --argjson epoch "$(date +%s)" \
