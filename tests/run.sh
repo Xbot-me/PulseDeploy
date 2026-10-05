@@ -402,6 +402,30 @@ PHP_BIN="$TMP/fakephp" API_HOST=api.example.com pulse deploy api --artifact "$TM
 if grep -q 'restart pulse-queue.service' "$TMP/systemctl.log"; then ok "queue restarted when enabled"; else bad "queue not restarted when enabled"; fi
 check_not "pulse rejects unknown command"  bash "$ROOT/bin/pulse" frobnicate
 check_not "pulse rejects unknown app"      bash "$ROOT/bin/pulse" deploy nothing --artifact x
+# pulse deploy api: tenant databases are migrated too
+cat >"$TMP/fakephp-mt" <<'EOF'
+#!/bin/sh
+# fake php artisan: logs each command; lists tenants:migrate unless FAKE_NO_TENANTS is set; fails it when FAKE_TENANTS_FAIL is set
+echo "$*" >>"$FAKE_LOG"
+case "$*" in
+  *"list --raw"*) [ -z "$FAKE_NO_TENANTS" ] && printf 'migrate\ntenants:migrate\n' ;;
+  *"tenants:migrate"*) [ -n "$FAKE_TENANTS_FAIL" ] && exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/fakephp-mt"
+mtdeploy() { PHP_BIN="$TMP/fakephp-mt" FAKE_LOG="$TMP/mt.log" API_HOST=api.example.com pulse deploy api --artifact "$TMP/api.tar.gz" "$@" >/dev/null 2>&1; }
+mkdir -p "$APPS_ROOT/api/releases" "$APPS_ROOT/api/shared"; echo "APP_KEY=base64:x" >"$APPS_ROOT/api/shared/.env"
+: >"$TMP/mt.log"; mtdeploy
+m_line="$(grep -n '^artisan migrate ' "$TMP/mt.log" | head -1 | cut -d: -f1)"; t_line="$(grep -n '^artisan tenants:migrate' "$TMP/mt.log" | head -1 | cut -d: -f1)"
+if [ -n "$m_line" ] && [ -n "$t_line" ] && [ "$m_line" -lt "$t_line" ]; then ok "deploy runs migrate, then tenants:migrate"; else bad "tenants:migrate not run after migrate: $(tr '\n' '|' <"$TMP/mt.log")"; fi
+: >"$TMP/mt.log"; mtdeploy --no-migrate
+if grep -q '^artisan tenants:migrate\|^artisan migrate ' "$TMP/mt.log"; then bad "--no-migrate still migrated"; else ok "--no-migrate skips both migrations"; fi
+: >"$TMP/mt.log"; FAKE_NO_TENANTS=1 mtdeploy
+if grep -q '^artisan tenants:migrate' "$TMP/mt.log"; then bad "tenants:migrate called although the app has none"; else ok "an app without tenants:migrate deploys as before"; fi
+before="$(readlink "$APPS_ROOT/api/current")"
+: >"$TMP/mt.log"; FAKE_TENANTS_FAIL=1 mtdeploy && failed=0 || failed=1
+if [ "$failed" = 1 ] && [ "$(readlink "$APPS_ROOT/api/current")" = "$before" ]; then ok "a failing tenant migration aborts the deploy; the live release is unchanged"; else bad "failing tenants:migrate did not stop the deploy (failed=$failed)"; fi
 unset PULSE_CONF APPS_ROOT
 
 echo "── bootstrap.sh CLI (no root needed for these)"

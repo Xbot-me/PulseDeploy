@@ -218,3 +218,24 @@ Suggested change (CRM): stop computing the summary inline.
    staff on the `medium` profile.
 
 The dashboard (p50 13 s in this run) has the same shape and needs the same treatment (cache the payload; section 6).
+
+## 8. After CRM commit 6239cb9 (sandbox re-measure, `medium` profile, 200,000 orders)
+
+Migration `2026_10_15_000001_add_reporting_indexes` and `tenants:migrate` ran without errors (13 s on the 200,000-order tenant).
+Single requests through the API (MariaDB 10.11, warm database, `CACHE_STORE=file`):
+
+| Request | First call after the cache expired | Cached |
+|---|---|---|
+| `GET /admin/orders?per_page=20` | 5.1 s (very first call), 2.3 s (other filters) | 0.13 to 0.17 s |
+| `GET /admin/dashboard` | 2.9 s | 0.18 s |
+
+So the cached path is fast, and a request that finds the cache empty still pays 2 to 3 seconds. One thing to fix in
+`LargeStoreCache::remember()`: it uses a plain `Cache::remember`, so when the 30-second entry expires **every concurrent
+request recomputes it at the same moment** (a cache stampede). Twenty staff opening the dashboard right after expiry run
+twenty copies of the heavy query at once, which is exactly the load that saturated both CPUs in benchmark L-003. Suggested:
+take a short lock around the compute (`Cache::lock(...)->block(...)` or `Cache::flexible()` / a stale-while-revalidate
+entry) so one request recomputes while the others serve the previous value. The benchmark will show whether it matters:
+compare `pulse-lt record` runs before and after.
+
+Deploy note for PulseDeploy users: `migrate` only migrates the central database. `pulse deploy api` now also runs
+`tenants:migrate` when the application has it, otherwise existing stores never receive migrations like this one.
