@@ -4,7 +4,7 @@
 #   sudo bash scripts/retune.sh             show what would change (changes nothing)
 #   sudo bash scripts/retune.sh --apply     apply it
 #
-# Values come from /etc/pulsedeploy/tuning.conf (see docs/auditing.md), falling
+# Values come from /etc/pulsedeploy/tuning.conf (see the README, "Auditing and tuning"), falling
 # back to the RAM-based sizing for anything not set there. Only the tunable
 # numbers are touched: no virtual host, TLS or application file is rewritten.
 #   PHP-FPM   pool file, config test, reload          (no dropped requests)

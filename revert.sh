@@ -389,7 +389,7 @@ revert_laravel_next() {
   run_or_echo rm -f /etc/systemd/system/pulse-next@.service /etc/systemd/system/pulse-queue.service \
     /etc/systemd/system/pulse-scheduler.service /etc/systemd/system/pulse-scheduler.timer
   run_or_echo systemctl daemon-reload
-  run_or_echo rm -f /usr/local/bin/pulse /etc/sudoers.d/pulsedeploy /etc/cron.d/pulsedeploy-backup \
+  run_or_echo rm -f /usr/local/bin/pulse /usr/local/bin/pulse-bench /etc/sudoers.d/pulsedeploy /etc/cron.d/pulsedeploy-backup \
     /etc/logrotate.d/pulsedeploy /etc/sysctl.d/99-pulsedeploy-app.conf \
     /etc/systemd/journald.conf.d/pulsedeploy.conf
   run_or_echo rm -rf /etc/pulsedeploy /etc/nginx/pulsedeploy

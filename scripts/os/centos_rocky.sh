@@ -14,7 +14,7 @@ os_install_base() {
   # EPEL first: some packages below (htop) only exist there.
   retry 3 5 pm_rpm install -y -q epel-release || warn "epel-release unavailable - some optional packages will be skipped"
 
-  local pkgs=(wget git unzip zip ca-certificates gnupg2 net-tools logrotate cronie tar gzip)
+  local pkgs=(wget git unzip zip jq ca-certificates gnupg2 net-tools logrotate cronie tar gzip)
   command -v curl &>/dev/null || pkgs+=(curl)
   retry 3 5 pm_rpm install -y -q "${pkgs[@]}"
   pkg_install_optional htop

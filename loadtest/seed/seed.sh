@@ -7,7 +7,7 @@
 #
 # Run it ON the server (it talks to the local database). It only ever touches a
 # store that holds no real data, and never the live store from /etc/pulsedeploy/crm.conf.
-# Everything it adds is marked, so --purge removes exactly that. Details: docs/load-testing.md
+# Everything it adds is marked, so --purge removes exactly that. Details: README, "Load testing and benchmarks"
 # =============================================================================
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +16,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 source "$ROOT/scripts/lib/common.sh"
 
 STORE=""; PRODUCTS=5000; CUSTOMERS=20000; ORDERS=100000; MONTHS=12; SEED=1
-CREATE_STORE=0; PURGE=0; ASSUME_YES=0; DRY_RUN=0
+CREATE_STORE=0; PURGE=0; ASSUME_YES=0; DRY_RUN=0; NO_DATA=0
 MAX_PRODUCTS=200000; MAX_CUSTOMERS=1000000; MAX_ORDERS=1000000
 MYSQL=(mysql)
 ADMIN_EMAIL="lt@loadtest.test"
@@ -34,6 +34,8 @@ Usage: sudo bash loadtest/seed/seed.sh --store <slug> [options]
   --orders <n>          default 100000 (max 1000000)
   --months <n>          spread orders over this many months, default 12 (1-60)
   --seed <n>            same number, same data (default 1)
+  --no-data             with --create-store: only create the (empty, plan "loadtest") store,
+                        for the CRM's own seeder:  sudo pulse-bench seed <store> --profile medium
   --purge               remove everything this tool added, then stop
   --dry-run             show the plan and the disk estimate, change nothing
   --yes                 do not ask for confirmation
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --seed)         need_value "$@"; SEED="$2"; shift 2 ;;
     --create-store) CREATE_STORE=1; shift ;;
     --purge)        PURGE=1; shift ;;
+    --no-data)      NO_DATA=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     --yes|-y)       ASSUME_YES=1; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -61,6 +64,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$STORE" ]] || { usage >&2; error "--store is required"; }
+[[ "$NO_DATA" -eq 0 || "$CREATE_STORE" -eq 1 ]] || error "--no-data only goes with --create-store"
 [[ "$STORE" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] || error "--store must be lower-case letters, digits and dashes"
 for pair in "products:$PRODUCTS" "customers:$CUSTOMERS" "orders:$ORDERS" "months:$MONTHS" "seed:$SEED"; do
   is_num "${pair#*:}" || error "--${pair%%:*} must be a whole number (got '${pair#*:}')"
@@ -70,7 +74,8 @@ done
 ((ORDERS >= 10 && ORDERS <= MAX_ORDERS)) || error "--orders must be 10..$MAX_ORDERS"
 ((MONTHS >= 1 && MONTHS <= 60)) || error "--months must be 1..60"
 
-DB="zymerce_tenant_${STORE//-/_}"
+# store:provision names the database aventech_tenant_<slug>; older installs used zymerce_tenant_<slug>
+DB="aventech_tenant_${STORE//-/_}"
 
 # The live store must never be seeded.
 LIVE=""
@@ -103,21 +108,41 @@ fi
 
 db_exists() { [[ -n "$("${MYSQL[@]}" -N -e "SELECT 1 FROM information_schema.schemata WHERE schema_name='$DB'")" ]]; }
 
+if [[ "$CREATE_STORE" -eq 0 ]] && ! db_exists; then
+  legacy="zymerce_tenant_${STORE//-/_}"
+  if [[ -n "$("${MYSQL[@]}" -N -e "SELECT 1 FROM information_schema.schemata WHERE schema_name='$legacy'")" ]]; then DB="$legacy"; fi
+fi
+
 if [[ "$CREATE_STORE" -eq 1 ]]; then
   db_exists && error "Store '$STORE' already exists; drop --create-store to use it."
   [[ -r /etc/pulsedeploy/pulse.conf ]] || error "No /etc/pulsedeploy/pulse.conf: the CRM is not installed here."
+  command -v jq >/dev/null || error "jq is required (sudo apt install jq / sudo dnf install jq)."
   # shellcheck source=/dev/null
   source /etc/pulsedeploy/pulse.conf
   # shellcheck source=scripts/lib/crm.sh
   source "$ROOT/scripts/lib/crm.sh"
   APP_USER="${APP_USER:-deploy}"
   PASS="$(generate_password 20)"
-  info "Creating store '$STORE'..."
-  crm_store_create "${PHP_BIN:-php}" "already provisioned" store:create "Load Test" "$STORE" \
-    "--email=$ADMIN_EMAIL" "--password=$PASS" || { rc=$?; [[ $rc -eq 2 ]] && error "Store already exists."; error "store:create failed."; }
+  PWFILE="$(mktemp /tmp/pulse-owner-pw.XXXXXX)"
+  trap 'rm -f -- "$PWFILE"' EXIT
+  chmod 600 "$PWFILE"; chown "$APP_USER" "$PWFILE"
+  printf '%s' "$PASS" >"$PWFILE"
+  declare -A CRM_VARS=([ADMIN_PASSWORD]="$PASS")
+  info "Creating store '$STORE' (store:provision, no catalog)..."
+  rc=0
+  crm_artisan_json "${PHP_BIN:-php}" store:provision "Load Test" "$STORE" \
+    "--owner-email=$ADMIN_EMAIL" "--password-file=$PWFILE" --catalog=none --plan=loadtest --json || rc=$?
+  rm -f -- "$PWFILE"
+  status="$(jq -r '.status // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  msg="$(jq -r '.message // empty' <<<"$CRM_JSON_OUT" 2>/dev/null || true)"
+  [[ "$rc:$status" == "0:created" ]] || error "store:provision failed (exit $rc): ${msg:-no JSON answer}${CRM_JSON_ERR:+ / ${CRM_JSON_ERR##*$'\n'}}"
   umask 077
   printf 'store=%s\nemail=%s\npassword=%s\n' "$STORE" "$ADMIN_EMAIL" "$PASS" >"$CRED_FILE"
   log "Admin login saved to $CRED_FILE (mode 600)."
+  if [[ "$NO_DATA" -eq 1 ]]; then
+    log "Store '$STORE' is ready and empty. Fill it with:  sudo pulse-bench seed $STORE --profile small|medium|large"
+    exit 0
+  fi
 fi
 
 db_exists || error "Database $DB does not exist. Create the store first (--create-store)."

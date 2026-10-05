@@ -119,6 +119,10 @@ lnx_create_dirs() {
     "$LNX_APPS_ROOT/api/shared/storage/framework/views" \
     "$LNX_APPS_ROOT/api/shared/storage/logs" \
     "$LNX_APPS_ROOT/admin/shared/next-cache" "$LNX_APPS_ROOT/shop/shared/next-cache"
+  # install -d gives the owner only to the directories it is asked for, not to the parents it
+  # creates on the way (storage/, storage/app, storage/framework, ...), which stayed root-owned
+  # and made them unwritable for the app. Own the whole storage tree.
+  chown -R "$APP_USER:$APP_USER" "$LNX_APPS_ROOT/api/shared/storage"
   install -d -m 755 "$LNX_ETC"
 }
 
@@ -505,6 +509,7 @@ lnx_setup_nginx() {
 # ── operations: CLI, backups, housekeeping ────────────────────────────────────
 lnx_install_pulse_cli() {
   install -m 0755 "$SCRIPT_DIR/bin/pulse" /usr/local/bin/pulse
+  install -m 0755 "$SCRIPT_DIR/bin/pulse-bench" /usr/local/bin/pulse-bench
   cat >"$LNX_ETC/pulse.conf" <<CONF
 # Written by the PulseDeploy installer; edit values here to change pulse behaviour.
 APP_USER=${APP_USER}

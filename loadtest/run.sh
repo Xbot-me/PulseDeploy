@@ -9,7 +9,7 @@
 # Run it from a DIFFERENT machine than the server (your laptop or a second VM): load
 # generated on the server's own CPUs measures the load generator as much as the server.
 # It asks you to type the target's name before any traffic is sent.
-# Details: docs/load-testing.md
+# Details: README, "Load testing and benchmarks"
 # =============================================================================
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

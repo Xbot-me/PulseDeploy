@@ -135,6 +135,13 @@ crm_clone() { # crm_clone <url> <ref> <dest>
     error "Could not download $1 @ $2 after 3 attempts. Check the network, then re-run (nothing else was changed)."
 }
 
+# crm_state_put <KEY> <value>: set one line of the remembered configuration
+crm_state_put() {
+  local f=/etc/pulsedeploy/crm.conf
+  [[ -f "$f" && -n "$2" ]] || return 0
+  if grep -q "^$1=" "$f"; then sed -i "s|^$1=.*|$1=$2|" "$f"; else printf '%s=%s\n' "$1" "$2" >>"$f"; fi
+}
+
 # ── Next.js ───────────────────────────────────────────────────────────────────
 # A JS/TS config without its comments, so "output: 'standalone'" mentioned in a
 # comment is not mistaken for a real setting. perl handles block comments; the
@@ -267,13 +274,29 @@ crm_store_create() {
   return 1
 }
 
+# crm_artisan_json <php-bin> <artisan args...>
+# Runs artisan in the API release as the app user and keeps the two streams apart:
+# stdout (one JSON object) -> CRM_JSON_OUT, stderr -> CRM_JSON_ERR. Returns artisan's exit status.
+CRM_JSON_OUT=""; CRM_JSON_ERR=""
+crm_artisan_json() {
+  local php="$1" errf rc=0
+  shift
+  errf="$(mktemp /tmp/pulse-artisan-err.XXXXXX)"; chmod 666 "$errf"
+  CRM_JSON_OUT="$(crm_as_app env CRM_API_CURRENT="${CRM_API_CURRENT:-/var/www/api/current}" bash -c 'cd "$CRM_API_CURRENT" && errf="$1" && bin="$2" && shift 2 && exec "$bin" artisan "$@" 2>>"$errf"' _ "$errf" "$php" "$@")" || rc=$?
+  CRM_JSON_ERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f -- "$errf"
+  # the owner password must never reach a log, even in an error text
+  if [[ -n "${CRM_VARS[ADMIN_PASSWORD]:-}" ]]; then CRM_JSON_ERR="${CRM_JSON_ERR//"${CRM_VARS[ADMIN_PASSWORD]}"/***}"; fi
+  return "$rc"
+}
+
 # ── smoke tests ───────────────────────────────────────────────────────────────
 crm_http_code() { # crm_http_code <host> <path> [curl args...]
   local host="$1" path="$2"
   shift 2
-  curl -s -o /dev/null -m 20 -w '%{http_code}' -H "Host: ${host}" "$@" "http://127.0.0.1${path}" 2>/dev/null || printf '000'
+  curl -s -o /dev/null -m 20 -w '%{http_code}' -H "Host: ${host}" "$@" "${CRM_LOCAL_URL:-http://127.0.0.1}${path}" 2>/dev/null || printf '000'
 }
 
 # ── remembered configuration (for `update`) ───────────────────────────────────
-CRM_STATE_SCALARS="CRM_ID CRM_REPO CRM_REF STORE STORE_NAME DOMAIN SCHEME API_HOST ADMIN_HOST SHOP_HOST STOREFRONT STOREFRONT_REPO STOREFRONT_REF STOREFRONT_DIR STOREFRONT_BUILD_CMD APP_USER"
+CRM_STATE_SCALARS="CRM_ID CRM_REPO CRM_REF STORE STORE_NAME DOMAIN SCHEME API_HOST ADMIN_HOST SHOP_HOST STOREFRONT STOREFRONT_REPO STOREFRONT_REF STOREFRONT_DIR STOREFRONT_BUILD_CMD APP_USER CRM_COMMIT PULSEDEPLOY_COMMIT"
 CRM_STATE_LISTS="STOREFRONT_BUILD_ENV STOREFRONT_RUNTIME_ENV"

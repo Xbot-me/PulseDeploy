@@ -13,7 +13,7 @@ os_update() {
 
 os_install_base() {
   retry 3 5 apt_get install \
-    curl wget git unzip zip \
+    curl wget git unzip zip jq \
     ca-certificates gnupg lsb-release \
     software-properties-common apt-transport-https \
     htop net-tools build-essential \

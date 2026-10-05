@@ -402,6 +402,30 @@ PHP_BIN="$TMP/fakephp" API_HOST=api.example.com pulse deploy api --artifact "$TM
 if grep -q 'restart pulse-queue.service' "$TMP/systemctl.log"; then ok "queue restarted when enabled"; else bad "queue not restarted when enabled"; fi
 check_not "pulse rejects unknown command"  bash "$ROOT/bin/pulse" frobnicate
 check_not "pulse rejects unknown app"      bash "$ROOT/bin/pulse" deploy nothing --artifact x
+# pulse deploy api: tenant databases are migrated too
+cat >"$TMP/fakephp-mt" <<'EOF'
+#!/bin/sh
+# fake php artisan: logs each command; lists tenants:migrate unless FAKE_NO_TENANTS is set; fails it when FAKE_TENANTS_FAIL is set
+echo "$*" >>"$FAKE_LOG"
+case "$*" in
+  *"list --raw"*) [ -z "$FAKE_NO_TENANTS" ] && printf 'migrate\ntenants:migrate\n' ;;
+  *"tenants:migrate"*) [ -n "$FAKE_TENANTS_FAIL" ] && exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/fakephp-mt"
+mtdeploy() { PHP_BIN="$TMP/fakephp-mt" FAKE_LOG="$TMP/mt.log" API_HOST=api.example.com pulse deploy api --artifact "$TMP/api.tar.gz" "$@" >/dev/null 2>&1; }
+mkdir -p "$APPS_ROOT/api/releases" "$APPS_ROOT/api/shared"; echo "APP_KEY=base64:x" >"$APPS_ROOT/api/shared/.env"
+: >"$TMP/mt.log"; mtdeploy
+m_line="$(grep -n '^artisan migrate ' "$TMP/mt.log" | head -1 | cut -d: -f1)"; t_line="$(grep -n '^artisan tenants:migrate' "$TMP/mt.log" | head -1 | cut -d: -f1)"
+if [ -n "$m_line" ] && [ -n "$t_line" ] && [ "$m_line" -lt "$t_line" ]; then ok "deploy runs migrate, then tenants:migrate"; else bad "tenants:migrate not run after migrate: $(tr '\n' '|' <"$TMP/mt.log")"; fi
+: >"$TMP/mt.log"; mtdeploy --no-migrate
+if grep -q '^artisan tenants:migrate\|^artisan migrate ' "$TMP/mt.log"; then bad "--no-migrate still migrated"; else ok "--no-migrate skips both migrations"; fi
+: >"$TMP/mt.log"; FAKE_NO_TENANTS=1 mtdeploy
+if grep -q '^artisan tenants:migrate' "$TMP/mt.log"; then bad "tenants:migrate called although the app has none"; else ok "an app without tenants:migrate deploys as before"; fi
+before="$(readlink "$APPS_ROOT/api/current")"
+: >"$TMP/mt.log"; FAKE_TENANTS_FAIL=1 mtdeploy && failed=0 || failed=1
+if [ "$failed" = 1 ] && [ "$(readlink "$APPS_ROOT/api/current")" = "$before" ]; then ok "a failing tenant migration aborts the deploy; the live release is unchanged"; else bad "failing tenants:migrate did not stop the deploy (failed=$failed)"; fi
 unset PULSE_CONF APPS_ROOT
 
 echo "── bootstrap.sh CLI (no root needed for these)"
@@ -528,6 +552,47 @@ printf '\033[200~secret~' >"$TMP/pw-bad"; printf 'secret' >"$TMP/pw-good"
 check_not "loadtest/run.sh rejects a password file with paste markers" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin --password-file "$TMP/pw-bad" --check
 check "loadtest/run.sh accepts a clean password file"  bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin --password-file "$TMP/pw-good" --check
 check "loadtest/run.sh --check validates and sends nothing" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin:1,aventech-storefront:3 --check
+echo "── crm.sh: smoke tests report failures by name"
+sc() { bash "$ROOT/tests/smoke_case.sh" "$@"; }
+check     "smoke: healthy install passes (store name checked)" sc ok 1
+check     "smoke: healthy install passes (name not checked)"   sc ok 0
+check_not "smoke: unreadable tenant database fails"            sc dbdown 0
+check_not "smoke: refused admin login fails"                   sc badlogin 0
+check_not "smoke: inactive scheduler timer fails"              sc ok 0 inactive
+echo "── crm.sh: store:provision step (fake artisan)"
+st() { bash "$ROOT/tests/store_case.sh" "$@"; }
+check "store: created, credentials 0600, password by file, no leak" st created
+check "store: operator-supplied password is kept"                  st supplied
+check "store: --catalog/--demo/--vertical are passed through"      st catalog
+check "store: existing store is left alone, no credentials"        st exists
+check "store: a refusal fails the run and shows the message"       st refused
+check "store: a crash fails the run"                               st crash
+echo "── laravel-next: the app owns the whole storage tree"
+(
+  if [[ $EUID -ne 0 ]] || ! getent group daemon >/dev/null 2>&1; then echo "  skip (needs root)"; exit 0; fi
+  STG="$(mktemp -d -p /tmp)"; trap 'rm -rf "${STG:?}"' EXIT
+  chmod 755 "$STG"
+  APP_USER=daemon; LNX_APPS_ROOT="$STG"; LNX_ETC="$STG/etc"
+  # shellcheck source=/dev/null
+  source <(awk '/^lnx_create_dirs\(\) \{/{p=1} p{print} p&&/^}$/{exit}' "$ROOT/scripts/stacks/laravel_next.sh")
+  lnx_create_dirs >/dev/null 2>&1
+  bad="$(find "$STG/api/shared" ! -user daemon 2>/dev/null | head -3)"
+  [[ -z "$bad" ]] || { echo "not owned by the app user: $bad" >&2; exit 1; }
+  # shellcheck disable=SC2016  # the inner bash expands $1
+  sudo_probe="$(runuser -u daemon -- bash -c 'touch "$1/api/shared/storage/app/probe" && echo ok' _ "$STG" 2>&1)"
+  [[ "$sudo_probe" == ok ]] || { echo "app user cannot write storage/app" >&2; exit 1; }
+); rc=$?
+if [[ $rc -eq 0 ]]; then ok "storage tree owned by the app user (or skipped without root)"; else bad "storage tree ownership"; fi
+echo "── pulse-bench: throttles, seed, record diff (fake artisan)"
+bench() { bash "$ROOT/tests/bench_case.sh" "$@"; }
+check "pulse-bench: throttles off/on restores .env byte for byte"   bench cycle
+check "pulse-bench: an existing LOADTEST_MODE line is restored"     bench keeps-existing-mode
+check "pulse-bench: refuses a CRM without LOADTEST_MODE, no change"  bench old-crm
+check "pulse-bench: seed validates, refuses the live store, passes options" bench seed
+check "pulse-bench: diff lists only what changed"                   bench diff
+check "pulse-bench: nginx percentiles come from new bytes only, per log" bench nginx
+check "pulse-bench: record attach replaces the load-generator results" bench attach
+check "pulse-bench: usage and bad input"                            bench usage
 check "loadtest/run.sh --url binds a single-host scenario" bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url https://app.example.com --check
 check_not "loadtest/run.sh rejects a bad --url"       bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url 'ftp://x' --check
 check_not "loadtest/run.sh rejects a bad --header"    bash "$ROOT/loadtest/run.sh" --scenario "$TMP/lt-site.json" --url https://a.test --header 'no colon' --check
@@ -542,6 +607,7 @@ check "pulse-lt init --from-urls writes a scenario"   bash "$ROOT/bin/pulse-lt" 
 check "pulse-lt check accepts what init wrote"        bash "$ROOT/bin/pulse-lt" check "$TMP/made.json"
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
+check_not "seed.sh --no-data needs --create-store"    bash "$ROOT/loadtest/seed/seed.sh" --store t --no-data --dry-run
 check_not "seed.sh rejects an unknown flag"           bash "$ROOT/loadtest/seed/seed.sh" --store t --bogus
 check_not "seed.sh rejects a bad store name"          bash "$ROOT/loadtest/seed/seed.sh" --store 'a;b' --dry-run
 check_not "seed.sh rejects a non-numeric count"       bash "$ROOT/loadtest/seed/seed.sh" --store t --orders many --dry-run

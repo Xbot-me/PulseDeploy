@@ -34,7 +34,7 @@ There is no Ansible, Terraform or YAML to learn. It is plain Bash you can read, 
 
 It grew out of running a WooCommerce store with 130k+ customers through 502 storms, a bloated database, a Redis misconfiguration and a payment-skimmer incident.
 
-**On this page:** [What you get](#what-you-get) · [Supported systems](#supported-operating-systems) · [Before you start](#before-you-start-every-os) · [Install on Ubuntu / Debian](#install-on-ubuntu--debian) · [Install on Amazon Linux 2023](#install-on-amazon-linux-2023-aws-ec2-or-a-vm) · [Install on Rocky / Alma / CentOS](#install-on-rocky--alma--centos--rhel) · [Working from Windows or macOS](#working-from-windows-or-macos) · [Stacks](#the-stacks) · [Options](#every-option) · [After installing](#after-installing) · [Operating the server](#operating-the-server) · [Auditing and tuning](#auditing-and-tuning) · [Load testing](#load-testing-your-own-software) · [Undo](#undoing-an-install) · [Troubleshooting](#troubleshooting)
+**On this page:** [What you get](#what-you-get) · [Supported systems](#supported-operating-systems) · [Before you start](#before-you-start-every-os) · [Install on Ubuntu / Debian](#install-on-ubuntu--debian) · [Install on Amazon Linux 2023](#install-on-amazon-linux-2023-aws-ec2-or-a-vm) · [Install on Rocky / Alma / CentOS](#install-on-rocky--alma--centos--rhel) · [Working from Windows or macOS](#working-from-windows-or-macos) · [Stacks](#the-stacks) · [Options](#every-option) · [After installing](#after-installing) · [Operating the server](#operating-the-server) · [Laravel + Next.js](#laravel--nextjs-in-detail) · [CRM in one command](#one-command-the-crm) · [Testing on a VM](#testing-on-a-vm) · [Auditing and tuning](#auditing-and-tuning) · [Load testing](#load-testing-your-own-software) · [Benchmarking a server](#benchmarking-a-server) · [Recent changes](#recent-changes) · [Undo](#undoing-an-install) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -42,8 +42,8 @@ It grew out of running a WooCommerce store with 130k+ customers through 502 stor
 
 | Category       | What's included |
 |----------------|----------------|
-| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL/MariaDB), LAMP (Apache + PHP + MySQL/MariaDB), Node.js + PM2 + Nginx reverse proxy, **Laravel + Next.js** (API + admin + storefront on one small server, see [docs](docs/laravel-next.md)) |
-| **One-command CRM** | `crm.sh` pulls, builds and configures the AvenTech CRM (Laravel API + Next.js admin, multi-tenant) with a chosen storefront ([docs](docs/crm-installer.md)) |
+| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL/MariaDB), LAMP (Apache + PHP + MySQL/MariaDB), Node.js + PM2 + Nginx reverse proxy, **Laravel + Next.js** (API + admin + storefront on one small server, see [Laravel + Next.js in detail](#laravel--nextjs-in-detail)) |
+| **One-command CRM** | `crm.sh` pulls, builds and configures the AvenTech CRM (Laravel API + Next.js admin, multi-tenant) with a chosen storefront ([details](#one-command-the-crm)) |
 | **PHP**        | Version selector (8.1 to 8.4; a third-party repo is added only if your distro lacks the version), OPcache JIT, PHP-FPM pool sized from RAM |
 | **Security**   | UFW or firewalld, fail2ban (SSH + Nginx + Apache), blocked access to `.env`/`.git`/`.sql`/backups, security headers, MariaDB/MySQL bound to localhost |
 | **SSL**        | Certbot (Let's Encrypt) with auto-renewal |
@@ -179,7 +179,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-xxxxxxxx --protocol tcp -
 aws ec2 authorize-security-group-ingress --group-id sg-xxxxxxxx --protocol tcp --port 443 --cidr 0.0.0.0/0
 ```
 
-Not on AWS? A VMware/VirtualBox/Proxmox VM running Amazon Linux 2023 works the same way: see [docs/testing-on-a-vm.md](docs/testing-on-a-vm.md) (host names without real DNS, snapshots, what to check).
+Not on AWS? A VMware/VirtualBox/Proxmox VM running Amazon Linux 2023 works the same way: see [Testing on a VM](#testing-on-a-vm) (host names without real DNS, snapshots, what to check).
 
 **2. Connect and get the code.** The default user is `ec2-user`:
 
@@ -274,10 +274,10 @@ Do not try to run `bootstrap.sh` on Windows or macOS: it installs system package
 | `lemp` | Nginx, PHP-FPM, MariaDB/MySQL | PHP sites, WordPress, Laravel on a classic server |
 | `lamp` | Apache, PHP, MariaDB/MySQL | Apache-only PHP apps |
 | `node` | Node.js, PM2, Nginx reverse proxy | any Node app on `--app-port` |
-| `laravel-next` | Nginx, PHP-FPM, MariaDB/MySQL, Redis, Node, systemd services for the API, queue worker, scheduler and two Next.js apps, backups, `pulse` CLI | Laravel API + Next.js admin + storefront on one 2-8 GB server ([guide](docs/laravel-next.md), [worked CRM example](docs/aventech-crm.md)) |
+| `laravel-next` | Nginx, PHP-FPM, MariaDB/MySQL, Redis, Node, systemd services for the API, queue worker, scheduler and two Next.js apps, backups, `pulse` CLI | Laravel API + Next.js admin + storefront on one 2-8 GB server ([details](#laravel--nextjs-in-detail), [CRM in one command](#one-command-the-crm)) |
 | `none` | core only (updates, selected services) | you bring your own application layer |
 
-`crm.sh install` is `laravel-next` plus pulling the CRM and storefront code, building them, creating the first store and running smoke tests ([docs/crm-installer.md](docs/crm-installer.md)). `bash crm.sh storefronts` lists the storefronts you can choose.
+`crm.sh install` is `laravel-next` plus pulling the CRM and storefront code, building them, creating the first store and running smoke tests ([details](#one-command-the-crm)). `bash crm.sh storefronts` lists the storefronts you can choose.
 
 ---
 
@@ -339,15 +339,106 @@ CI examples that build and deploy automatically are in `examples/github-actions/
 
 ---
 
+## Laravel + Next.js in detail
+
+`--stack laravel-next` sets up one VPS for a Laravel API, a Next.js admin dashboard and a Next.js storefront, tuned for a low monthly bill: about 4 GB of RAM is comfortable, 2 GB works with swap.
+
+| Host (default) | Served by |
+|---|---|
+| `api.<domain>` | nginx, PHP-FPM (Laravel) |
+| `admin.<domain>` | nginx, Next.js on `127.0.0.1:3001` (systemd) |
+| `<domain>` | nginx, Next.js on `127.0.0.1:3000` (systemd) |
+
+Also installed: MariaDB/MySQL (tuned), Redis (cache, sessions, queues, loopback only), a queue worker and a scheduler timer (systemd), a `deploy` user, a firewall, fail2ban, automatic security updates, nightly database backups and the `pulse` command. Override host names with `--api-host`, `--admin-host`, `--shop-host`.
+
+**Why it is cheap to run:** PHP-FPM `ondemand` (idle RAM close to zero); the database sized for a shared box (buffer pool about 18% of RAM, performance schema off, 50-100 connections); Next.js `standalone` output under systemd (no PM2, a memory cap per app); nginx serves `/_next/static` from disk and caches optimised images; Cloudflare in front with `--cloudflare` restores real visitor IPs; builds belong in CI, not on the server.
+
+| Server RAM | php-fpm workers | Database buffer pool | Redis | Node heap (admin / shop) |
+|---:|---:|---:|---:|---|
+| 2 GB | 6 | 384 MB | 122 MB | 256 / 256 MB |
+| 4 GB | 13 | 768 MB | 245 MB | 256 / 384 MB |
+| 8 GB | 27 | 1 GB | 491 MB | 384 / 512 MB |
+
+Useful options: `--tenant-db-prefix P` (apps with one database per tenant: the DB user may create and manage databases named `P*`, and only those), `--serve-storage` (nginx serves `/storage/*` straight from the Laravel public disk), `--no-queue` / `--no-scheduler`.
+
+**Deploying** is done with `pulse`, as the `deploy` user:
+
+```bash
+pulse deploy api   --artifact api.tar.gz        # or: --git URL --ref main
+pulse deploy admin --artifact admin.tar.gz
+pulse deploy shop  --artifact shop.tar.gz
+pulse rollback api                              # previous release, instantly
+pulse status                                    # services, releases, health, disk, RAM
+pulse logs queue -f                             # api | admin | shop | queue | scheduler | php | nginx
+sudo pulse backup                               # also nightly at about 03:xx
+sudo pulse restore /var/backups/pulsedeploy/db-....sql.gz --yes
+```
+
+Each deploy builds a new directory under `releases/`, links the shared `.env` and `storage`, runs migrations (the central database **and, for multi-tenant apps that provide a `tenants:migrate` command, every tenant database**; a failure there stops the deploy before the release goes live), caches, then switches `current` atomically. If the new release fails its health check, `pulse` switches back. The last 5 releases are kept. For Next.js, set `output: 'standalone'` and package `server.js`, `.next/`, `public/` and `node_modules/` at the archive root (`examples/github-actions/` has complete workflows); `NEXT_PUBLIC_*` values are baked in at build time.
+
+Operating notes: backups live in `/var/backups/pulsedeploy` (root only, 7 days); set `RCLONE_REMOTE` in `/etc/pulsedeploy/pulse.conf` to copy them off the server and `HEALTHCHECK_URL` to be alerted when one does not run. The web processes run as `deploy`, which keeps permissions simple on a single-tenant server but means a compromised app can rewrite its own code. Re-running the installer is safe; undo with `sudo bash revert.sh --stack`.
+
+---
+
+## One command: the CRM
+
+`crm.sh` provisions the server, pulls the AvenTech CRM (Laravel 11 API + Next.js admin, multi-tenant) and the storefront you choose from Git, builds and deploys them, creates the first store and checks that everything answers.
+
+```bash
+sudo bash crm.sh install --domain example.com --email you@example.com --certbot --cloudflare \
+  --storefront <id | git-url | none> \
+  --store acme --store-name "Acme Shop" --admin-email you@example.com \
+  --git-token-file /root/gh-token \
+  -- --timezone Asia/Dhaka --swap-size 2G
+```
+
+What it does, in order:
+
+1. **Validates** every option and checks each repository and branch is reachable before anything changes (`--check`, `--dry-run` stop here).
+2. **Provisions the server** with `bootstrap.sh --stack laravel-next` (database `aventech_crm` / user `aventech`, rights on `aventech_tenant_*` only, uploads served by nginx).
+3. **Pulls, builds and deploys** the backend (`composer install`), the admin app and the storefront (`npm ci && npm run build`, standalone output). Builds run as the unprivileged deploy user; each deploy is an atomic release that rolls back if the health check fails.
+4. **Creates the first store** with the CRM's production command `store:provision`: a strong random owner password (read from a root-owned temp file, never from the command line, deleted afterwards), no moderator or development accounts, an empty or starter catalog (`--catalog none|starter|demo`, default `starter`; `demo` needs `--demo <slug>`; `--vertical` picks the catalog profile). The result is one JSON object the installer reads; the password goes to `/root/pulsedeploy-crm-credentials.txt` (root only), never to the log. An existing store is left alone and its credentials are not rewritten. The store slug is 2-40 lower-case letters, digits and dashes, starting with a letter.
+5. **Smoke-tests** the API, a real read of the store's database through the API, the admin (including a real login), the storefront, the scheduler timer and, with `--certbot`, the certificates. **If any check fails the command lists exactly which, prints no success banner and exits non-zero**, so CI and scripts notice.
+
+A new gadget-shop client in one command (the storefront lives in the CRM repository; the store slug is compiled into the builds, so one install serves one client):
+
+```bash
+sudo bash crm.sh install --domain client.example --email you@example.com --certbot \
+  --storefront gadgets --store voltgadgets --store-name "Volt Gadgets" \
+  --admin-email owner@client.example --git-token-file /root/gh-token
+```
+
+**Choosing a storefront:** `bash crm.sh storefronts` lists them. `--storefront <id>` uses a definition in `apps/storefronts/<id>.conf` (copy `sample.conf.disabled`); `--storefront <git-url>` takes any Next.js repository (add `--storefront-ref`, `--storefront-dir`, `--storefront-build-cmd` and repeatable `--storefront-build-env` / `--storefront-runtime-env KEY=value`, with `{API_URL} {ADMIN_URL} {SHOP_URL} {INTERNAL_API_URL} {STORE} {STORE_NAME} {DOMAIN}` available); `none` installs the CRM only. If the storefront does not use `output: "standalone"`, the installer turns it on for the build.
+
+**Private repositories:** `--git-token-file FILE` (or `PULSE_GIT_TOKEN`; passed through the environment, never a command line) or `--git-ssh-key FILE` for `git@` URLs.
+
+**Day two:**
+
+```bash
+sudo pulse-crm update                          # pull, rebuild and redeploy everything
+sudo pulse-crm update --only backend,admin     # or: storefront --storefront-ref v1.4.0
+```
+
+`update` remembers the install choices (`/etc/pulsedeploy/crm.conf`, which also records the CRM and PulseDeploy commits that were deployed). Other flow options: `--skip-server`, `--only backend,admin,storefront`, `--crm-repo` / `--crm-ref`, `--reset-env`; everything after `--` goes to `bootstrap.sh`. Building on the server needs memory: Node's heap is sized from RAM and the stack enables swap on 4 GB or less; for very small servers build in CI and use `pulse deploy`.
+
+**If GitHub downloads keep breaking part-way** (`curl 56`, `curl 92`, `early EOF`): the installer already retries three times with HTTP/1.1. On VM/NAT networks large packets can vanish while ICMP is filtered; `sudo sysctl -w net.ipv4.tcp_mtu_probing=1` (and the same line in `/etc/sysctl.d/99-mtu-probing.conf`) fixes the common case. Or bring the repository over as a bundle (`git bundle create`, `scp`, clone on the server) and pass `--crm-repo file:///srv/crm`.
+
+---
+
+## Testing on a VM
+
+Use a machine you can throw away and take a snapshot after the OS is updated. Amazon Linux **2023** needs 4 GB RAM (2 GB works with swap), 2 vCPU, 15 GB+ disk and internet access. Without real DNS, add the three host names to the hosts file of the machine whose browser or load generator you use (`C:\Windows\System32\drivers\etc\hosts` as Administrator on Windows, `/etc/hosts` elsewhere): `192.168.1.50  api.crm.test admin.crm.test shop.crm.test`, then pass `--api-host api.crm.test --admin-host admin.crm.test --shop-host shop.crm.test`. Leave out `--certbot` and `--cloudflare`. `scripts/vm-check.sh` is a read-only readiness check. After the install try `pulse status`, `sudo pulse backup`, `pulse rollback admin`, and re-run the same `crm.sh install ...` (it must succeed without changing the store).
+
+---
+
 ## Auditing and tuning
 
-| Tool | Command | What it does |
-|---|---|---|
-| **Audit** | `sudo pulse-crm audit` or `sudo bash scripts/audit.sh [--no-perf]` | read-only: compares the live server with its tuning targets (settings, memory, cache hit rates, latency, hardening) ([docs](docs/auditing.md)) |
-| **Retune** | `sudo pulse-crm retune [--apply]` | applies hand-tuned values from `/etc/pulsedeploy/tuning.conf` (they survive re-runs) |
-| **Test data** | `sudo bash loadtest/seed/seed.sh --store loadtest --create-store` | AvenTech CRM only: fills a separate test store with realistic products, customers and orders (100k orders in about 10 s); `--purge` removes it |
+```bash
+sudo pulse-crm audit                  # or: sudo bash scripts/audit.sh [--load] [--no-perf]
+sudo pulse-crm retune [--apply]       # apply hand-tuned values from /etc/pulsedeploy/tuning.conf
+```
 
-Seed realistic data before load testing: an empty database always looks fast. [docs/CRM-SCALING-FINDINGS.md](docs/CRM-SCALING-FINDINGS.md) records what that showed for the AvenTech CRM (order list and dashboard slow down sharply past about 10,000 orders).
+The audit is **read-only**; each line is `PASS`, `WARN`, `FAIL`, `INFO` or `SKIP` with the measured value next to its target, and it exits 1 when anything failed, so it works in a monitoring job. It checks that the server (1) matches its own tuning (PHP-FPM pool, OPcache, InnoDB buffer pool, connections, Redis memory and policy, Node heap and `MemoryMax`, nginx), (2) behaves well when measured (available memory, swap, buffer-pool hit ratio, temp tables on disk, slow queries, Redis evictions, Node restarts, response times from the server itself, compression and asset caching, Laravel release state, optional load burst), and (3) is hardened (only SSH, 80 and 443 public; databases and Redis loopback only; firewall and fail2ban active; file permissions; backup freshness; disk and inode use). Thresholds marked *guideline* are starting points (`AUDIT_P95_MS`, `AUDIT_SAMPLES`). Tune in a loop: measure a realistic load, change one thing, measure again; hand-tuned values go in `/etc/pulsedeploy/tuning.conf` and survive re-runs.
 
 ---
 
@@ -432,7 +523,59 @@ The exit status is 0 for PASS and 1 for FAIL, so the same command works as a CI 
 - Every request carries an `X-Load-Test: <run id>` header so you can find or filter the traffic in your logs.
 - Test the origin server directly, not through a CDN that may block the traffic. A single source address means per-IP limits see one visitor.
 
-Not covered here: browser rendering time (use Lighthouse), network-level floods, and anything on a system you do not own. The full guide, with the scenario file format, profiles and how a virtual person behaves, is in [docs/load-testing.md](docs/load-testing.md). Example scenarios for the AvenTech CRM are in `loadtest/scenarios/`.
+Not covered here: browser rendering time (use Lighthouse), network-level floods, and anything on a system you do not own. A virtual person pauses for a log-normal think time, runs a few weighted journeys per visit, may leave half-way, fetches scripts and styles only on a cold browser cache, and a new person arrives after a gap. Example scenarios for the AvenTech CRM are in `loadtest/scenarios/`; `bash loadtest/run.sh --check ...` validates a scenario without sending traffic.
+
+---
+
+## Benchmarking a server
+
+The traffic comes from `loadtest/run.sh` or `pulse-lt` (see "Load testing your own software" above), run from a **separate** machine. Two tools run **on the server being tested**: `loadtest/seed/seed.sh` (realistic test data as plain SQL, any CRM version, refuses the live store, `--purge` removes exactly what it added) and `pulse-bench`, which seeds the CRM's own dataset, lifts the rate limits for a run, records the server's side and compares runs. An empty database always looks fast, so **seed first**. The CRM limits logins to 5 a minute per account, so people on one account share one login unless you pass `--accounts-file` to `loadtest/run.sh`. Only test servers you own.
+
+**One benchmark, step by step** (on the server, against a disposable store, never a client's):
+
+```bash
+sudo bash loadtest/seed/seed.sh --store loadtest --create-store --no-data   # an empty store with plan "loadtest"
+sudo pulse-bench seed loadtest --profile small --seed 42                       # small 10k orders, medium 200k, large 1M (+ reviews and behaviour events)
+sudo pulse-bench throttles off --for 120                                       # optional: lift the per-IP rate limits (restores itself)
+sudo pulse-bench record start L-001 --note "what this run is"
+#   ... run loadtest/run.sh (or pulse-lt run) from your PC, then copy loadtest/results/<time>/summary.json to the server (scp file user@server:) ...
+sudo pulse-bench record stop --results ~/summary.json                          # writes benchmark-L-001.json and .md
+sudo pulse-bench throttles on
+sudo pulse-bench diff /var/lib/pulsedeploy/bench/L-001/benchmark-L-001.json /var/lib/pulsedeploy/bench/L-002/benchmark-L-002.json
+```
+
+`pulse-bench throttles off` sets `LOADTEST_MODE=true` and `APP_ENV=staging` (the CRM ignores the switch in production on purpose), rebuilds the config cache and reloads PHP-FPM; `on` restores the original `.env` byte for byte, and a systemd timer does the same after `--for` minutes. `record` snapshots the VM, versions, deployed commits, database/PHP/OPcache/Redis/nginx settings and the dataset; samples CPU, I/O wait, steal, swap, memory, PHP workers, Node memory and database threads during the run; reads nginx request times per log (API, loopback API, admin, storefront); counts database and Redis activity; lists every query slower than 200 ms; and merges the load generator's results. `diff` prints only what differs, so two runs are comparable when that list is just the change under test. Add results from a forgotten run later with `sudo pulse-bench record attach <id> --results summary.json`.
+
+What this does not tell you: it is server-side load, not a browser (JavaScript is not run); think times are a model (set them from your analytics); all traffic comes from one address; and a slow endpoint with no slow query is a PHP problem to profile, not to guess.
+
+### Results so far: AvenTech CRM on 2 vCPU / 4 GB
+
+Amazon Linux 2023 on a VMware VM, MariaDB 10.11, PHP 8.4. Every run: `--profile breakpoint --time-scale 0.25 --step-users 10 --step-seconds 120` against the admin scenario, rate limits lifted. At four times normal speed, 150 users is roughly 600 ordinary staff. Client p95 values are Locust's rounded buckets.
+
+| Run | CRM version | Data | Requests | Failed | Worst p95 | Dashboard p95 | Orders list p95 | CPU peak | Outcome |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| L-002 | before the reporting changes | 10k orders | 54,598 | 0 | 670 ms | 670 ms | 390 ms | 97% | PASS, no breakpoint found |
+| L-003 | before the reporting changes | 200k orders | 676 | 0 | 17,000 ms | 17,000 ms | 11,000 ms | 100% | FAIL at the first step (about 10 users) |
+| L-004 | indexes + cache + no stampede | 200k orders | 55,800 | 0 | 790 ms | 600 ms | 360 ms | 100% | PASS, no breakpoint found |
+
+L-003 stopped after 515 s at its first step while L-004 ran every step up to 150 users for 37 minutes, so the improvement is larger than the table suggests. Server side in L-004: nginx API p50 82 ms, p95 355 ms, p99 963 ms; 359,586 database queries of which 1,474 slower than 200 ms (all cache refreshes); Redis 29,372 commands with 13,188 hits and 16 misses; peak memory 2.3 GB of 3.9 GB, no swap, no I/O wait.
+
+**Findings**
+
+1. **Data volume, not server tuning, was the limit.** With 10,000 orders the 2 vCPU box coped with a heavy mixed load. With 200,000 orders the admin dashboard and order list recomputed whole-table aggregates on every request, saturating both CPUs at about 10 users. Tuning PHP, the database and Redis does not fix that.
+2. **The fix was in the application:** covering indexes for the reporting queries, a short (30 s) cache for the heavy aggregates on large stores, and a lock so that when the cache entry expires one request refreshes it while the others get the previous value. A plain 30 s `Cache::remember` would let every concurrent request recompute at expiry (a cache stampede). Result: p95 of the heavy pages fell from 11-17 s to 0.4-0.8 s.
+3. **What is left:** the p99 of the dashboard (2.0 s) and the status-filtered list (1.5 s) are people who arrive while a refresh runs, and CPU still touches 100% at the top of the ramp. No step failed, so this server's real breakpoint has not been found yet (next: `--max-users 400` or the `large` profile). Ideas: refresh the cache from the scheduler so nobody waits, a longer cache for very large stores, a cheaper "new versus repeat customers" figure.
+4. **Redis was idle before the change** (113 commands in a whole run); it now does real work. If your admin endpoints are not cached at all, that is the first place to look.
+
+---
+
+## Recent changes
+
+* **`crm.sh`:** smoke failures now fail the install (named, non-zero exit, no success banner) with new checks (real tenant read, scheduler timer, store name on the API and storefront, certificate validity); the first store is created with `store:provision` (password by file, JSON result, `--catalog` / `--demo` / `--vertical`); the CRM definition uses the CRM's database names and trusts only the local nginx for client IPs; the scheduler stays on; a gadget-shop storefront definition (`--storefront gadgets`); the CRM and PulseDeploy commits are recorded in `/etc/pulsedeploy/crm.conf`; `jq` is installed with the base packages.
+* **`pulse deploy api`:** also runs `tenants:migrate` when the app has it, so existing stores receive later migrations; a failure aborts the deploy before the release is live.
+* **Installer fixes found by real runs:** the app user now owns the whole `storage/` tree (parent directories used to stay root-owned, so the app could not write to `storage/app`); nginx access logs carry the request time, including the loopback API that the admin and storefront call (its log used to be off); the Redis version is read from `INFO` (Amazon Linux's `redis6`).
+* **New tools:** `pulse-bench` (seed, rate-limit switch, benchmark records, `diff`, `attach`), `loadtest/seed/seed.sh` (SQL test data with `--no-data`, `--purge`), the human-like load generator (`loadtest/run.sh`) and its scenarios; the admin scenario no longer calls an order-detail URL the CRM does not have.
+* **README and OS guides:** per-OS install steps for Ubuntu/Debian, Amazon Linux 2023 and Rocky/Alma/CentOS, plus Windows and macOS client notes.
 
 ---
 
@@ -463,7 +606,7 @@ Every failure prints the function, file:line and command that stopped. The insta
 | `git clone` fails with a network error | retry (the installer retries and uses HTTP/1.1); for a private repo pass `--git-token-file` |
 | Port 80 in use | stop the other web server (`sudo systemctl disable --now apache2` etc.) and re-run |
 
-Need help? Send the last 40 terminal lines, both log files, `bash scripts/vm-check.sh` and `cat /etc/os-release`. More: [docs/testing-on-a-vm.md](docs/testing-on-a-vm.md).
+Need help? Send the last 40 terminal lines, both log files, `bash scripts/vm-check.sh` and `cat /etc/os-release`. More: [Testing on a VM](#testing-on-a-vm).
 
 ---
 
@@ -476,8 +619,8 @@ PulseDeploy/
 ├── crm.sh                    # One command: pull, build, install and configure a CRM + storefront
 ├── apps/                     # CRM and storefront definitions (crm/, storefronts/)
 ├── bin/pulse                 # On-server CLI: deploy, rollback, status, logs, backup (laravel-next)
+├── bin/pulse-bench           # On-server benchmark helper: seed, rate-limit switch, benchmark records, diff
 ├── bin/pulse-lt              # Load-test CLI for any site: init, check, run, report
-├── docs/                     # Guides: laravel-next, crm-installer, auditing, load-testing, VM testing, CRM findings
 ├── examples/github-actions/  # CI workflows that build and deploy the apps
 ├── loadtest/                 # Load-test engine (run.sh, builder.py, init.py), example scenarios, seed/ (CRM test data)
 ├── tests/run.sh              # Unit tests for helpers + CLI validation

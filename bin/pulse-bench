@@ -1,0 +1,548 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pulse-bench - server side of a load-test run on a PulseDeploy Laravel + Next.js server
+#
+#   pulse-bench status                          what is configured right now
+#   pulse-bench seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--force] [--yes]
+#   pulse-bench throttles off [--for MINUTES]   lift the app's per-IP rate limits (LOADTEST_MODE), auto-restore
+#   pulse-bench throttles on                    put the server back as it was
+#   pulse-bench record start <id> [--note TEXT] snapshot the server, start sampling
+#   pulse-bench record stop  [--results FILE]   stop, add the load generator's summary.json, write the record
+#   pulse-bench record attach <id> --results F  replace the load generator's results of a finished record
+#   pulse-bench diff <a.json> <b.json>          what differs between two records
+#
+# The traffic itself comes from another machine (loadtest/run.sh). Only run this on a server you own,
+# and only against a disposable store: seeding fills it with fake data.
+# =============================================================================
+set -Eeuo pipefail
+
+PULSE_CONF="${PULSE_CONF:-/etc/pulsedeploy/pulse.conf}"
+CRM_CONF="${CRM_CONF:-/etc/pulsedeploy/crm.conf}"
+# shellcheck source=/dev/null
+[[ -r "$PULSE_CONF" ]] && source "$PULSE_CONF"
+
+APP_USER="${APP_USER:-deploy}"
+APPS_ROOT="${APPS_ROOT:-/var/www}"
+PHP_BIN="${PHP_BIN:-php}"
+PHP_FPM_SVC="${PHP_FPM_SVC:-php-fpm}"
+API_CURRENT="${API_CURRENT:-$APPS_ROOT/api/current}"
+API_ENV="${API_ENV:-$APPS_ROOT/api/shared/.env}"
+LT_STATE="${PULSE_BENCH_STATE:-}"
+if [[ -z "$LT_STATE" ]]; then # records made under the tool's earlier name (pulse-lt) stay where they are
+  LT_STATE=/var/lib/pulsedeploy/bench
+  [[ ! -d /var/lib/pulsedeploy/lt || -d /var/lib/pulsedeploy/bench ]] || LT_STATE=/var/lib/pulsedeploy/lt
+fi
+LT_ENV_BACKUP="$LT_STATE/env-backup"
+NGINX_LOG_DIR="${NGINX_LOG_DIR:-/var/log/nginx}"   # every pulse-*.access.log in it is measured
+SLOW_MS="${SLOW_MS:-200}"
+SAMPLE_SECONDS="${SAMPLE_SECONDS:-5}"
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; RESET=$'\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; RESET=''
+fi
+say()  { printf '%s\n' "${GREEN}[ok]${RESET} $*"; }
+note() { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "${YELLOW}[warn]${RESET} $*" >&2; }
+die()  { printf '%s\n' "${RED}[error]${RESET} $*" >&2; exit 1; }
+trap 'die "failed at line $LINENO: $BASH_COMMAND"' ERR
+
+need_root() { [[ $EUID -eq 0 || -n "${PULSE_BENCH_ALLOW_NONROOT:-}" ]] || die "Run as root: sudo pulse-bench $*"; }
+need_jq()   { command -v jq >/dev/null || die "jq is required (sudo apt install jq / sudo dnf install jq)"; }
+
+# artisan in the API release, as the application user
+artisan() {
+  if [[ $EUID -eq 0 ]]; then
+    local home
+    home="$(getent passwd "$APP_USER" | cut -d: -f6)"
+    # shellcheck disable=SC2016  # the single-quoted script is run by the inner bash
+    (cd / && runuser -u "$APP_USER" -- env HOME="$home" PATH="$PATH" bash -c 'cd "$1" && shift && exec "$@"' _ "$API_CURRENT" "$PHP_BIN" -d memory_limit=1G artisan "$@")
+  else
+    (cd "$API_CURRENT" && "$PHP_BIN" -d memory_limit=1G artisan "$@")
+  fi
+}
+
+env_get() { { sed -n "s/^$1=//p" "$API_ENV" 2>/dev/null || true; } | head -n1 | tr -d "\"'"; }
+env_set() { # env_set KEY VALUE   (replace the line or append one)
+  if grep -q "^$1=" "$API_ENV"; then sed -i "s|^$1=.*|$1=$2|" "$API_ENV"; else printf '%s=%s\n' "$1" "$2" >>"$API_ENV"; fi
+}
+env_unset() { sed -i "/^$1=/d" "$API_ENV"; }
+
+live_store() { { sed -n 's/^STORE=//p' "$CRM_CONF" 2>/dev/null || true; } | head -n1 | tr -d "\"'"; }
+
+mysql_q() { mysql -N -B -e "$1" 2>/dev/null; }
+redis_cli() {
+  local c
+  c="$(command -v redis6-cli || command -v redis-cli || true)"
+  [[ -n "$c" ]] || return 1
+  "$c" "$@"
+}
+
+# ── status ────────────────────────────────────────────────────────────────────
+cmd_status() {
+  need_jq
+  note "APP_ENV in .env      : $(env_get APP_ENV)"
+  note "LOADTEST_MODE in .env: $(env_get LOADTEST_MODE)"
+  if [[ -d "$API_CURRENT" ]]; then
+    local out
+    if out="$(artisan loadtest:status --json 2>/dev/null)" && jq -e . >/dev/null 2>&1 <<<"$out"; then
+      note "loadtest:status      : $out"
+    else
+      warn "this CRM release has no loadtest:status (needs a CRM commit with LOADTEST_MODE)"
+    fi
+  fi
+  [[ -f "$LT_ENV_BACKUP" ]] && warn "throttles are OFF (the original settings are saved; 'pulse-bench throttles on' restores them)"
+  return 0
+}
+
+# ── seed ──────────────────────────────────────────────────────────────────────
+cmd_seed() {
+  need_root seed; need_jq
+  local store="${1:-}"; [[ -n "$store" && "$store" != --* ]] || die "usage: pulse-bench seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--yes]"
+  shift
+  local profile=small seed=42 asof="" reset=0 yes=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --profile) profile="${2:?}"; shift 2 ;;
+      --seed)    seed="${2:?}"; shift 2 ;;
+      --as-of)   asof="${2:?}"; shift 2 ;;
+      --reset)   reset=1; shift ;;
+      --force)   force=1; shift ;;   # a disposable test server whose only store is the one being filled
+      --yes|-y)  yes=1; shift ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+  [[ "$store" =~ ^[a-z][a-z0-9-]{1,39}$ ]] || die "invalid store slug '$store'"
+  [[ "$profile" =~ ^(small|medium|large)$ ]] || die "--profile must be small, medium or large"
+  [[ "$seed" =~ ^[0-9]+$ ]] || die "--seed must be a number"
+  [[ -z "$asof" || "$asof" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "--as-of must be YYYY-MM-DD"
+  [[ "$store" != "$(live_store)" || $force -eq 1 ]] || die "'$store' is the store installed by crm.sh ($CRM_CONF). On a disposable test server add --force; otherwise seed a separate store (plan=loadtest)."
+  artisan list --raw 2>/dev/null | grep -q '^loadtest:seed' || die "this CRM release has no loadtest:seed (deploy a CRM commit that has it)"
+  if [[ $yes -eq 0 ]]; then
+    [[ -t 0 ]] || die "not a terminal: pass --yes"
+    read -r -p "Fill store '$store' with FAKE $profile data$([[ $force -eq 1 ]] && echo ' (--force: its plan is not checked)')? Type the store name: " a
+    [[ "$a" == "$store" ]] || die "not confirmed"
+  fi
+  local -a args=(loadtest:seed "$store" "--profile=$profile" "--seed=$seed" --json)
+  [[ -z "$asof" ]] || args+=("--as-of=$asof")
+  [[ $reset -eq 0 ]] || args+=(--reset)
+  [[ $force -eq 0 ]] || args+=(--force)
+  # The seeder refuses APP_ENV=production. Only this one process is told otherwise (--env); the server's
+  # own configuration is not touched. The line before the JSON object is dropped if the app prints one.
+  local out
+  out="$(artisan "${args[@]}" --env=staging)" || { printf '%s\n' "$out" >&2; die "loadtest:seed failed"; }
+  jq -e . >/dev/null 2>&1 <<<"$out" || { printf '%s\n' "$out" >&2; die "loadtest:seed did not print JSON"; }
+  jq -r '"seeded: \(.requested // . | tostring)  in \(.seconds // "?") s"' <<<"$out"
+  # Keep our own copy of the dataset description: the CRM writes its manifest with a silenced
+  # file_put_contents, which does nothing when storage/app is not writable.
+  install -d -m 700 "$LT_STATE"
+  (umask 077; printf '%s\n' "$out" >"$LT_STATE/dataset.json")
+  note "dataset description saved: $LT_STATE/dataset.json (attached to the next benchmark record)"
+}
+
+# ── throttles ─────────────────────────────────────────────────────────────────
+reload_php() {
+  if command -v systemctl >/dev/null && systemctl is-active --quiet "${PHP_FPM_SVC}.service" 2>/dev/null; then
+    systemctl reload "${PHP_FPM_SVC}.service"
+  else
+    warn "php-fpm service '${PHP_FPM_SVC}' not running here: nothing reloaded"
+  fi
+}
+apply_config() { artisan config:cache >/dev/null; reload_php; }
+
+throttles_effective() { artisan loadtest:status --json 2>/dev/null | jq -r '.effective' 2>/dev/null || echo unknown; }
+
+cmd_throttles() {
+  need_root throttles; need_jq
+  local what="${1:-}"; shift || true
+  [[ -f "$API_ENV" ]] || die "no $API_ENV (is the API installed?)"
+  case "$what" in
+    off)
+      local mins=120
+      while [[ $# -gt 0 ]]; do case "$1" in --for) mins="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+      [[ "$mins" =~ ^[0-9]+$ && "$mins" -ge 1 && "$mins" -le 1440 ]] || die "--for must be 1..1440 minutes"
+      artisan list --raw 2>/dev/null | grep -q '^loadtest:status' || die "this CRM release has no LOADTEST_MODE (deploy a newer CRM commit)"
+      install -d -m 700 "$LT_STATE"
+      if [[ -f "$LT_ENV_BACKUP" ]]; then
+        warn "throttles are already off (restore with: pulse-bench throttles on)"
+      else
+        {
+          printf 'APP_ENV=%s\n' "$(env_get APP_ENV)"
+          grep -q '^LOADTEST_MODE=' "$API_ENV" && printf 'LOADTEST_MODE=%s\n' "$(env_get LOADTEST_MODE)" || printf 'LOADTEST_MODE_ABSENT=1\n'
+        } >"$LT_ENV_BACKUP"
+        chmod 600 "$LT_ENV_BACKUP"
+      fi
+      # The CRM ignores LOADTEST_MODE when APP_ENV=production, so the environment is switched for the
+      # duration of the run and put back afterwards. Debug stays off.
+      env_set APP_ENV staging
+      env_set LOADTEST_MODE true
+      apply_config
+      local eff; eff="$(throttles_effective)"
+      [[ "$eff" == "true" ]] || { warn "LOADTEST_MODE did not take effect (loadtest:status says: $eff); restoring"; cmd_throttles on || true; die "could not lift the throttles"; }
+      say "Per-IP rate limits are OFF (APP_ENV=staging, LOADTEST_MODE=true)."
+      warn "This server is NOT production-configured until you run: pulse-bench throttles on"
+      note "nginx's own limit on the login URLs (30 per minute per IP) stays on; use a shared login or --accounts-file."
+      if command -v systemd-run >/dev/null && [[ -d /run/systemd/system ]]; then
+        if systemd-run --quiet --unit="pulse-bench-restore" --on-active="${mins}m" /usr/local/bin/pulse-bench throttles on >/dev/null 2>&1; then
+          note "Automatic restore in ${mins} minutes (unit pulse-bench-restore)."
+        else
+          warn "could not schedule the automatic restore: remember to run 'pulse-bench throttles on'"
+        fi
+      else
+        warn "no systemd timer available: remember to run 'pulse-bench throttles on'"
+      fi
+      ;;
+    on)
+      if [[ ! -f "$LT_ENV_BACKUP" ]]; then
+        note "Nothing to restore (throttles were not lifted by pulse-bench)."
+        [[ "$(env_get LOADTEST_MODE)" != "true" ]] || warn "LOADTEST_MODE=true is set in .env by hand: remove it"
+        return 0
+      fi
+      local old_env old_mode absent
+      old_env="$(sed -n 's/^APP_ENV=//p' "$LT_ENV_BACKUP")"
+      old_mode="$(sed -n 's/^LOADTEST_MODE=//p' "$LT_ENV_BACKUP")"
+      absent="$(sed -n 's/^LOADTEST_MODE_ABSENT=//p' "$LT_ENV_BACKUP")"
+      if [[ -n "$old_env" ]]; then env_set APP_ENV "$old_env"; else env_unset APP_ENV; fi
+      if [[ "$absent" == 1 ]]; then env_unset LOADTEST_MODE; else env_set LOADTEST_MODE "${old_mode:-false}"; fi
+      apply_config
+      rm -f -- "$LT_ENV_BACKUP"
+      systemctl stop pulse-bench-restore.timer >/dev/null 2>&1 || true
+      local eff; eff="$(throttles_effective)"
+      [[ "$eff" != "true" ]] || die "LOADTEST_MODE is still in effect: check $API_ENV"
+      say "Rate limits are back on; APP_ENV=${old_env:-<unset>} restored."
+      ;;
+    status|"") cmd_status ;;
+    *) die "usage: pulse-bench throttles off [--for MINUTES] | on | status" ;;
+  esac
+}
+
+# ── measuring ─────────────────────────────────────────────────────────────────
+status_json() { # key<TAB>value lines on stdin -> {"key": number|string}
+  jq -R -s 'split("\n") | map(select(length>0) | split("\t")) | map(.[1] as $v | {(.[0]): ($v | tonumber? // $v)}) | add // {}'
+}
+mysql_status_json() { mysql_q "SHOW GLOBAL STATUS" | status_json; }
+redis_info_json() {
+  redis_cli INFO 2>/dev/null | tr -d '\r' | grep -E '^[a-z_]+:' | sed 's/:/\t/' | status_json || echo '{}'
+}
+
+versions_json() {
+  local php my red node ngx
+  php="$("$PHP_BIN" -v 2>/dev/null | head -n1 | cut -d' ' -f2 || true)"
+  my="$(mysql_q "SELECT VERSION()" || true)"
+  red="$({ redis_cli INFO server 2>/dev/null || true; } | tr -d '\r' | sed -n 's/^redis_version://p')"
+  node="$(node -v 2>/dev/null || true)"
+  ngx=""; ! command -v nginx >/dev/null || ngx="$(nginx -v 2>&1 | sed 's/.*nginx\///')"
+  jq -n --arg php "$php" --arg mysql "$my" --arg redis "$red" --arg node "$node" --arg nginx "$ngx" \
+    '{php:$php, mysql:$mysql, redis:$redis, node:$node, nginx:$nginx}'
+}
+
+vm_json() {
+  local vendor product disk os
+  vendor="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"; product="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+  disk="$(df -Pm / | awk 'NR==2{print $2}')"
+  os="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
+  jq -n --argjson vcpu "$(nproc)" --argjson ram "$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)" \
+        --argjson disk "${disk:-0}" --arg vendor "$vendor" --arg product "$product" --arg os "$os" --arg kernel "$(uname -r)" \
+    '{vcpu:$vcpu, ram_mb:$ram, root_disk_mb:$disk, provider:(($vendor + " " + $product) | gsub("^ +| +$"; "")), os:$os, kernel:$kernel}'
+}
+
+settings_json() {
+  local my fpm opc redis nginxw
+  my="$(mysql_q "SELECT 'innodb_buffer_pool_size', @@innodb_buffer_pool_size UNION ALL SELECT 'max_connections', @@max_connections UNION ALL SELECT 'innodb_flush_log_at_trx_commit', @@innodb_flush_log_at_trx_commit UNION ALL SELECT 'table_open_cache', @@table_open_cache" | status_json)"
+  fpm="$({ grep -rhE '^(pm|pm\.max_children|pm\.max_requests|pm\.process_idle_timeout) *=' /etc/php*/fpm/pool.d /etc/php-fpm.d 2>/dev/null || true; } | sed 's/ *= */\t/' | sort -u | status_json)"
+  opc="$({ grep -rhE '^opcache\.[a-z_]+ *=' /etc/php* 2>/dev/null || true; } | sed 's/ *= */\t/' | sort -u | status_json)"
+  redis="$({ redis_cli CONFIG GET maxmemory 2>/dev/null || true; } | paste - - | head -n1 | status_json)"
+  nginxw="$({ nginx -T 2>/dev/null || true; } | { grep -E '^\s*(worker_processes|worker_connections)' || true; } | tr -d ';' | awk '{print $1"\t"$2}' | status_json)"
+  jq -n --argjson mysql "$my" --argjson php_fpm "$fpm" --argjson opcache "$opc" --argjson redis "$redis" --argjson nginx "$nginxw" \
+    '{mysql:$mysql, php_fpm:$php_fpm, opcache:$opcache, redis:$redis, nginx:$nginx}'
+}
+
+commits_json() {
+  local crm pd ref
+  conf_val() { { sed -n "s/^$1=//p" "$CRM_CONF" 2>/dev/null || true; } | head -n1 | tr -d "\"'"; }
+  crm="$(conf_val CRM_COMMIT)"; pd="$(conf_val PULSEDEPLOY_COMMIT)"; ref="$(conf_val CRM_REF)"
+  jq -n --arg crm "${crm:-unknown}" --arg pd "${pd:-unknown}" --arg ref "$ref" \
+    '{crm_commit:$crm, crm_ref:$ref, pulsedeploy_commit:$pd}'
+}
+
+dataset_json() {
+  local f
+  for f in "$API_CURRENT/storage/app/loadtest-dataset.json" "$LT_STATE/dataset.json"; do
+    if [[ -r "$f" ]] && jq -e . "$f" >/dev/null 2>&1; then cat "$f"; return 0; fi
+  done
+  echo 'null'
+}
+mode_json() {
+  local out
+  if out="$(artisan loadtest:status --json 2>/dev/null)" && jq -e . >/dev/null 2>&1 <<<"$out"; then echo "$out"; else echo 'null'; fi
+}
+
+# background sampler: one CSV line every SAMPLE_SECONDS
+sampler() { # sampler <csv> <pidfile>
+  local csv="$1"
+  echo "ts,load1,mem_used_mb,swap_used_mb,php_workers,php_rss_mb,node_rss_mb,mysql_threads,redis_mem_mb" >"$csv"
+  while :; do
+    local ts load mem swap pw prss nrss thr rmem
+    ts="$(date +%s)"; load="$(cut -d' ' -f1 /proc/loadavg)"
+    mem="$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{print int((t-a)/1024)}' /proc/meminfo)"
+    swap="$(awk '/SwapTotal/{t=$2}/SwapFree/{f=$2}END{print int((t-f)/1024)}' /proc/meminfo)"
+    read -r pw prss < <(ps -eo rss,args 2>/dev/null | awk '/php-fpm: pool/ && !/awk/ {n++; r+=$1} END{print n+0, int(r/1024)}')
+    nrss="$(ps -eo rss,args 2>/dev/null | awk '/next-server|\/server\.js|pulse-next/ && !/awk/ {r+=$1} END{print int(r/1024)}')"
+    thr="$(mysql_q "SHOW GLOBAL STATUS LIKE 'Threads_connected'" | awk '{print $2}' || true)"
+    rmem="$(redis_cli INFO memory 2>/dev/null | tr -d '\r' | awk -F: '/^used_memory:/{print int($2/1048576)}' || true)"
+    echo "$ts,$load,$mem,$swap,$pw,$prss,$nrss,${thr:-0},${rmem:-0}" >>"$csv"
+    sleep "$SAMPLE_SECONDS"
+  done
+}
+
+# nginx request-time statistics for the part of a log written since <offset> bytes
+nginx_stats() { # nginx_stats <file> <offset>  -> JSON object or null
+  local f="$1" off="${2:-0}"
+  [[ -r "$f" ]] || { echo null; return 0; }
+  tail -c +"$((off + 1))" "$f" 2>/dev/null | awk '
+    { for (i=1;i<=NF;i++) if ($i ~ /^rt=/) { rt[++n]=substr($i,4)+0 }
+      split($0, q, "\""); split(q[3], s, " "); if (s[1] ~ /^[0-9][0-9][0-9]$/) st[s[1]]++ }
+    END {
+      if (n==0) { print "null"; exit }
+      m = asort(rt)
+      i50=int(m*0.5); if (i50<m*0.5) i50++; if (i50<1) i50=1
+      i95=int(m*0.95); if (i95<m*0.95) i95++; if (i95<1) i95=1
+      i99=int(m*0.99); if (i99<m*0.99) i99++; if (i99<1) i99=1
+      printf "{\"requests\":%d,\"p50_ms\":%.0f,\"p95_ms\":%.0f,\"p99_ms\":%.0f,\"max_ms\":%.0f,\"status\":{", m, rt[i50]*1000, rt[i95]*1000, rt[i99]*1000, rt[m]*1000
+      first=1; for (c in st) { printf "%s\"%s\":%d", (first?"":","), c, st[c]; first=0 }
+      print "}}"
+    }'
+}
+nginx_offsets_json() {
+  local f out='{}'
+  for f in "$NGINX_LOG_DIR"/pulse-*.access.log; do
+    [[ -e "$f" ]] || continue
+    out="$(jq --arg k "$(basename "$f")" --argjson v "$(stat -c %s "$f")" '. + {($k): $v}' <<<"$out")"
+  done
+  echo "$out"
+}
+nginx_all_json() { # nginx_all_json <offsets-json> -> {"pulse-api.access.log": {...}, ...} (only logs that saw timed requests)
+  local offs="$1" f name stats out='{}'
+  for f in "$NGINX_LOG_DIR"/pulse-*.access.log; do
+    [[ -e "$f" ]] || continue
+    name="$(basename "$f")"
+    stats="$(nginx_stats "$f" "$(jq -r --arg k "$name" '.[$k] // 0' <<<"$offs")")"
+    [[ "$stats" != null ]] || continue
+    out="$(jq --arg k "$name" --argjson v "$stats" '. + {($k): $v}' <<<"$out")"
+  done
+  echo "$out"
+}
+
+cmd_record() {
+  need_root record; need_jq
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    start)
+      local id="${1:-}"; shift || true
+      [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || die "usage: pulse-bench record start <id>   (letters, digits, . _ -)"
+      local note=""
+      while [[ $# -gt 0 ]]; do case "$1" in --note) note="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+      local dir="$LT_STATE/$id"
+      [[ ! -e "$dir" ]] || die "record '$id' already exists ($dir): pick a new id"
+      [[ ! -f "$LT_STATE/active" ]] || die "record '$(cat "$LT_STATE/active")' is still running: pulse-bench record stop"
+      install -d -m 700 "$dir"
+      local slow_state="" slow_file="" datadir=""
+      slow_state="$(mysql_q "SELECT @@slow_query_log, @@long_query_time, @@slow_query_log_file" || true)"
+      slow_file="$(awk -F'\t' '{print $3}' <<<"$slow_state")"
+      datadir="$(mysql_q "SELECT @@datadir" || true)"
+      [[ "$slow_file" == /* || -z "$slow_file" ]] || slow_file="${datadir%/}/$slow_file"
+      [[ "$(dataset_json)" != null ]] || warn "no dataset description found (run 'pulse-bench seed' first, or the record will say 'none recorded')"
+      mysql_status_json >"$dir/mysql.start.json"
+      redis_info_json >"$dir/redis.start.json"
+      jq -n --arg id "$id" --arg note "$note" --arg at "$(date -u +%FT%TZ)" --argjson epoch "$(date +%s)" \
+            --argjson vm "$(vm_json)" --argjson versions "$(versions_json)" --argjson settings "$(settings_json)" \
+            --argjson commits "$(commits_json)" --argjson dataset "$(dataset_json)" --argjson mode "$(mode_json)" \
+            --arg slow_state "$slow_state" --arg slow_file "$slow_file" \
+            --argjson nginx_offsets "$(nginx_offsets_json)" \
+            --argjson slow_offset "$(stat -c %s "${slow_file:-/nonexistent}" 2>/dev/null || echo 0)" \
+            '{id:$id, note:$note, started:$at, started_epoch:$epoch, environment:{vm:$vm, versions:$versions, commits:$commits},
+              config:{settings:$settings, dataset:$dataset, loadtest_mode:$mode},
+              _internal:{slow_state:$slow_state, slow_file:$slow_file, nginx_offsets:$nginx_offsets, slow_offset:$slow_offset}}' >"$dir/start.json"
+      if [[ -n "$slow_state" ]]; then
+        mysql_q "SET GLOBAL slow_query_log=1; SET GLOBAL long_query_time=$(awk "BEGIN{print $SLOW_MS/1000}")" >/dev/null || warn "could not enable the slow query log"
+      fi
+      vmstat -n "$SAMPLE_SECONDS" >"$dir/vmstat.txt" 2>/dev/null </dev/null &
+      echo $! >"$dir/vmstat.pid"
+      sampler "$dir/samples.csv" </dev/null >/dev/null 2>&1 &
+      echo $! >"$dir/sampler.pid"
+      disown -a 2>/dev/null || true
+      echo "$id" >"$LT_STATE/active"
+      say "Recording '$id'. Slow queries over ${SLOW_MS} ms are being logged. Start the load now; then: pulse-bench record stop --results summary.json"
+      [[ "$(jq -r '.config.loadtest_mode.effective // false' "$dir/start.json")" == "true" ]] || note "(rate limits are ON for this run; use 'pulse-bench throttles off' first to measure raw capacity)"
+      ;;
+    stop)
+      local results=""
+      while [[ $# -gt 0 ]]; do case "$1" in --results) results="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+      [[ -f "$LT_STATE/active" ]] || die "no record is running (pulse-bench record start <id>)"
+      local id dir
+      id="$(cat "$LT_STATE/active")"; dir="$LT_STATE/$id"
+      if [[ -n "$results" ]]; then
+        [[ -e "$results" ]] || die "--results: $results does not exist. Copy summary.json from the load generator first (scp loadtest/results/<time>/summary.json user@server:)."
+        [[ -s "$results" ]] || die "--results: $results is empty."
+        local jerr
+        jerr="$(jq -e . "$results" 2>&1 >/dev/null)" || die "--results: $results is not valid JSON (${jerr:-unreadable}). Is it the summary.json written by loadtest/run.sh?"
+      fi
+      local p
+      for p in vmstat sampler; do
+        if [[ -f "$dir/$p.pid" ]]; then kill "$(cat "$dir/$p.pid")" 2>/dev/null || true; fi
+      done
+      mysql_status_json >"$dir/mysql.end.json"; redis_info_json >"$dir/redis.end.json"
+      local slow_state slow_file slow_off
+      slow_state="$(jq -r '._internal.slow_state' "$dir/start.json")"; slow_file="$(jq -r '._internal.slow_file' "$dir/start.json")"
+      slow_off="$(jq -r '._internal.slow_offset' "$dir/start.json")"
+      if [[ -n "$slow_state" ]]; then
+        local was_on was_t
+        was_on="$(awk -F'\t' '{print $1}' <<<"$slow_state")"; was_t="$(awk -F'\t' '{print $2}' <<<"$slow_state")"
+        mysql_q "SET GLOBAL slow_query_log=${was_on:-0}; SET GLOBAL long_query_time=${was_t:-10}" >/dev/null || true
+      fi
+      # slow queries during the run: count and the worst few
+      local slow_json='{"count":0,"worst":[]}'
+      if [[ -n "$slow_file" && -r "$slow_file" ]]; then
+        tail -c +"$((slow_off + 1))" "$slow_file" >"$dir/slow.log" 2>/dev/null || true
+        slow_json="$(awk '
+          /^# Query_time:/ {qt=$3; rows=$9}
+          /^(select|SELECT|insert|INSERT|update|UPDATE|delete|DELETE|with|WITH)/ {n++; q=substr($0,1,160); print qt "\t" q}
+          ' "$dir/slow.log" | sort -rn | awk -F'\t' 'BEGIN{n=0} {c++; if(n<5){w[n++]=$0}} END{printf "%d\n", c; for(i=0;i<n;i++) print w[i]}' | {
+            read -r cnt || cnt=0
+            jq -R -s --argjson count "${cnt:-0}" '{count:$count, worst:(split("\n") | map(select(length>0) | split("\t") | {seconds:(.[0]|tonumber? // 0), query:.[1]}))}'
+          })"
+      fi
+      # nginx request-time percentiles and status codes over the run, per log (api, internal api, admin, shop)
+      local nginx_json
+      nginx_json="$(nginx_all_json "$(jq -c '._internal.nginx_offsets' "$dir/start.json")")"
+      local vm_json_out='null'
+      if [[ -s "$dir/vmstat.txt" ]]; then
+        vm_json_out="$(awk 'NR>2 && NF>=17 { n++; us+=$13; sy+=$14; wa+=$16; st+=$17; si+=$7; so+=$8; if($13+$14>mx) mx=$13+$14; if($16>wmx) wmx=$16; if($17>smx) smx=$17 }
+          END { if(n==0){print "null"; exit}
+                printf "{\"samples\":%d,\"cpu_user_pct_avg\":%.1f,\"cpu_system_pct_avg\":%.1f,\"cpu_busy_pct_max\":%d,\"io_wait_pct_avg\":%.1f,\"io_wait_pct_max\":%d,\"steal_pct_avg\":%.1f,\"steal_pct_max\":%d,\"swap_in_kb_s_avg\":%.0f,\"swap_out_kb_s_avg\":%.0f}\n", n, us/n, sy/n, mx, wa/n, wmx, st/n, smx, si/n, so/n }' "$dir/vmstat.txt")"
+      fi
+      local samples_json='null'
+      if [[ -s "$dir/samples.csv" ]]; then
+        samples_json="$(awk -F, 'NR>1 { n++; if($2>l)l=$2; if($3>m)m=$3; if($4>s)s=$4; if($5>w)w=$5; if($6>pr)pr=$6; if($7>nr)nr=$7; if($8>t)t=$8; if($9>rm)rm=$9 }
+          END { if(n==0){print "null"; exit}
+                printf "{\"samples\":%d,\"load1_max\":%s,\"mem_used_mb_max\":%d,\"swap_used_mb_max\":%d,\"php_workers_max\":%d,\"php_rss_mb_max\":%d,\"node_rss_mb_max\":%d,\"mysql_threads_max\":%d,\"redis_mem_mb_max\":%d}\n", n, l+0, m, s, w, pr, nr, t, rm }' "$dir/samples.csv")"
+      fi
+      local mysql_delta redis_delta
+      mysql_delta="$(jq -n --slurpfile a "$dir/mysql.start.json" --slurpfile b "$dir/mysql.end.json" '
+        ["Questions","Com_select","Com_insert","Com_update","Com_delete","Slow_queries","Connections","Aborted_connects","Threads_created",
+         "Created_tmp_tables","Created_tmp_disk_tables","Innodb_buffer_pool_reads","Innodb_buffer_pool_read_requests","Innodb_row_lock_waits","Select_full_join"] as $k
+        | ($a[0]) as $s | ($b[0]) as $e
+        | ([$k[] | {(.): ((($e[.] // 0) | tonumber? // 0) - (($s[.] // 0) | tonumber? // 0))}] | add)
+        + {max_used_connections: ($e.Max_used_connections // 0)}
+        | . + {buffer_pool_hit_ratio: (if .Innodb_buffer_pool_read_requests > 0 then (1 - (.Innodb_buffer_pool_reads / .Innodb_buffer_pool_read_requests)) else null end)}')"
+      redis_delta="$(jq -n --slurpfile a "$dir/redis.start.json" --slurpfile b "$dir/redis.end.json" '
+        ($a[0]) as $s | ($b[0]) as $e
+        | {commands: (($e.total_commands_processed // 0) - ($s.total_commands_processed // 0)),
+           keyspace_hits: (($e.keyspace_hits // 0) - ($s.keyspace_hits // 0)),
+           keyspace_misses: (($e.keyspace_misses // 0) - ($s.keyspace_misses // 0)),
+           evicted_keys: (($e.evicted_keys // 0) - ($s.evicted_keys // 0)),
+           used_memory_peak_mb: ((($e.used_memory_peak // 0) / 1048576) | floor)}')"
+      local client='null'; [[ -z "$results" ]] || client="$(cat "$results")"
+      local now; now="$(date +%s)"
+      jq --argjson client "$client" --argjson slow "$slow_json" --argjson nginx "$nginx_json" --argjson vmstat "$vm_json_out" \
+         --argjson samples "$samples_json" --argjson mysql "$mysql_delta" --argjson redis "$redis_delta" \
+         --arg ended "$(date -u +%FT%TZ)" --argjson dur "$((now - $(jq -r .started_epoch "$dir/start.json")))" \
+         'del(._internal) | . + {ended:$ended, duration_s:$dur,
+            server:{nginx:$nginx, cpu_io:$vmstat, peaks:$samples, mysql:$mysql, redis:$redis, slow_queries:$slow},
+            client:$client}' "$dir/start.json" >"$dir/benchmark-$id.json"
+      render_md "$dir/benchmark-$id.json" >"$dir/benchmark-$id.md"
+      chmod 600 "$dir"/*
+      rm -f "$LT_STATE/active" "$dir/vmstat.pid" "$dir/sampler.pid"
+      say "Record written: $dir/benchmark-$id.json and .md"
+      cat "$dir/benchmark-$id.md"
+      ;;
+    attach)
+      # add (or replace) the load generator's summary of a record that is already written
+      local aid="${1:-}"; shift || true
+      local afile=""
+      while [[ $# -gt 0 ]]; do case "$1" in --results) afile="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+      [[ -n "$aid" && -n "$afile" ]] || die "usage: pulse-bench record attach <id> --results summary.json"
+      local rec="$LT_STATE/$aid/benchmark-$aid.json"
+      [[ -f "$rec" ]] || die "no finished record '$aid' ($rec)"
+      [[ -s "$afile" ]] || die "--results: $afile is missing or empty"
+      local aerr
+      aerr="$(jq -e . "$afile" 2>&1 >/dev/null)" || die "--results: $afile is not valid JSON ($aerr)"
+      jq --slurpfile c "$afile" '.client = $c[0]' "$rec" >"$rec.new" && mv "$rec.new" "$rec"
+      render_md "$rec" >"$LT_STATE/$aid/benchmark-$aid.md"
+      chmod 600 "$rec" "$LT_STATE/$aid/benchmark-$aid.md"
+      say "Load-generator results of '$aid' replaced from $afile"
+      cat "$LT_STATE/$aid/benchmark-$aid.md"
+      ;;
+    *) die "usage: pulse-bench record start <id> [--note TEXT] | stop [--results summary.json] | attach <id> --results summary.json" ;;
+  esac
+}
+
+render_md() { # render_md <record.json>
+  jq -r '
+    def f: if . == null then "n/a" else tostring end;
+    "# Benchmark \(.id)\n" +
+    (if .note != "" then "\n\(.note)\n" else "" end) +
+    "\n- Started \(.started), \(.duration_s) s\n" +
+    "- VM: \(.environment.vm.vcpu) vCPU, \(.environment.vm.ram_mb) MB RAM, \(.environment.vm.provider), \(.environment.vm.os)\n" +
+    "- Versions: PHP \(.environment.versions.php | f), \(.environment.versions.mysql | f), Redis \(.environment.versions.redis | f), Node \(.environment.versions.node | f), nginx \(.environment.versions.nginx | f)\n" +
+    "- Commits: CRM \(.environment.commits.crm_commit) (ref \(.environment.commits.crm_ref)), PulseDeploy \(.environment.commits.pulsedeploy_commit)\n" +
+    "- Dataset: \(if .config.dataset then "\(.config.dataset.profile // "custom") profile, seed \(.config.dataset.seed), store \(.config.dataset.store), as of \(.config.dataset.as_of): \(.config.dataset.counts | tostring)" else "none recorded" end)\n" +
+    "- Rate limits lifted (LOADTEST_MODE in effect): \(.config.loadtest_mode.effective | f)\n" +
+    "\n## Server\n" +
+    ([.server.nginx // {} | to_entries[] | "- nginx \(.key | sub("^pulse-"; "") | sub("\\.access\\.log$"; "")): \(.value.requests) requests, p50 \(.value.p50_ms) ms, p95 \(.value.p95_ms) ms, p99 \(.value.p99_ms) ms, status \(.value.status | tostring)\n"] | join("")) +
+    (if .server.cpu_io then "- CPU busy avg \((.server.cpu_io.cpu_user_pct_avg + .server.cpu_io.cpu_system_pct_avg))%, max \(.server.cpu_io.cpu_busy_pct_max)%; I/O wait avg \(.server.cpu_io.io_wait_pct_avg)%; steal avg \(.server.cpu_io.steal_pct_avg)%; swap in/out \(.server.cpu_io.swap_in_kb_s_avg)/\(.server.cpu_io.swap_out_kb_s_avg) KB/s\n" else "" end) +
+    (if .server.peaks then "- Peaks: load \(.server.peaks.load1_max), memory \(.server.peaks.mem_used_mb_max) MB, swap \(.server.peaks.swap_used_mb_max) MB, PHP workers \(.server.peaks.php_workers_max) (\(.server.peaks.php_rss_mb_max) MB), Node \(.server.peaks.node_rss_mb_max) MB, MySQL threads \(.server.peaks.mysql_threads_max)\n" else "" end) +
+    "- MySQL: \(.server.mysql.Questions) queries, \(.server.mysql.Slow_queries) slow, buffer pool hit ratio \(.server.mysql.buffer_pool_hit_ratio | f), tmp tables on disk \(.server.mysql.Created_tmp_disk_tables), max connections used \(.server.mysql.max_used_connections)\n" +
+    "- Redis: \(.server.redis.commands) commands, hits \(.server.redis.keyspace_hits), misses \(.server.redis.keyspace_misses), evicted \(.server.redis.evicted_keys)\n" +
+    "- Slow queries over the threshold: \(.server.slow_queries.count)" +
+    ([.server.slow_queries.worst[]? | "\n  - \(.seconds) s  \(.query)"] | join("")) + "\n" +
+    (if .client then
+      "\n## Load generator\n- \(.client.total) requests, \(.client.failed) failed, worst endpoint p95 \(.client.worst_p95_ms) ms" +
+      (if (.client.problems | length) > 0 then ", PROBLEMS: " + (.client.problems | join("; ")) else ", within limits" end) + "\n\n" +
+      "| endpoint | requests | failures | p50 | p95 | p99 |\n|---|---|---|---|---|---|\n" +
+      ([.client.endpoints[]? | "| \(.name) | \(.requests) | \(.failures) | \(.p50_ms) | \(.p95_ms) | \(.p99_ms) |"] | join("\n")) + "\n"
+     else "\n(no load-generator results attached)\n" end)
+  ' "$1"
+}
+
+cmd_diff() {
+  need_jq
+  local a="${1:-}" b="${2:-}"
+  [[ -r "$a" && -r "$b" ]] || die "usage: pulse-bench diff <a.json> <b.json>"
+  note "== Differences in the environment and configuration (comparable only when this list is just the change under test) =="
+  jq -n --slurpfile a "$a" --slurpfile b "$b" '
+    def flat(o): [o | paths(scalars) as $p | {key: ($p | map(tostring) | join(".")), value: getpath($p)}] | from_entries;
+    (flat($a[0].environment + {config: $a[0].config})) as $x | (flat($b[0].environment + {config: $b[0].config})) as $y
+    | [($x | keys[]), ($y | keys[])] | unique | map(select($x[.] != $y[.]))
+    | map(select(startswith("config.dataset.generated") | not))
+    | .[] as $k | "  \($k): \($x[$k] // "-") -> \($y[$k] // "-")"' -r
+  note ""
+  note "== Results =="
+  jq -n -r --slurpfile a "$a" --slurpfile b "$b" '
+    def idx(c): (c // []) | map({(.name): .}) | add // {};
+    (idx($a[0].client.endpoints)) as $x | (idx($b[0].client.endpoints)) as $y
+    | "endpoint                                         p95 ms (a -> b)    failures (a -> b)",
+      ([($x | keys[]), ($y | keys[])] | unique | .[] as $k
+        | "\($k[0:46] | . + (" " * (47 - length)))\(($x[$k].p95_ms // "-") | tostring) -> \(($y[$k].p95_ms // "-") | tostring)    \(($x[$k].failures // "-") | tostring) -> \(($y[$k].failures // "-") | tostring)"),
+      "",
+      "worst p95: \($a[0].client.worst_p95_ms // "n/a") -> \($b[0].client.worst_p95_ms // "n/a") ms;  requests: \($a[0].client.total // "n/a") -> \($b[0].client.total // "n/a");  failed: \($a[0].client.failed // "n/a") -> \($b[0].client.failed // "n/a")",
+      "server p95 (nginx, \(($b[0].server.nginx // {}) | keys | map(sub("^pulse-"; "") | sub("\\.access\\.log$"; "")) | join(", ") | if . == "" then "no timed log" else . end)): \((($a[0].server.nginx // {}) | to_entries | map(.value.p95_ms) | max) // "n/a") -> \((($b[0].server.nginx // {}) | to_entries | map(.value.p95_ms) | max) // "n/a") ms;  CPU busy avg: \((($a[0].server.cpu_io.cpu_user_pct_avg // 0) + ($a[0].server.cpu_io.cpu_system_pct_avg // 0))) -> \((($b[0].server.cpu_io.cpu_user_pct_avg // 0) + ($b[0].server.cpu_io.cpu_system_pct_avg // 0))) %"'
+}
+
+usage() { sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+main() {
+  case "${1:-help}" in
+    status)    shift; cmd_status "$@" ;;
+    seed)      shift; cmd_seed "$@" ;;
+    throttles) shift; cmd_throttles "$@" ;;
+    record)    shift; cmd_record "$@" ;;
+    diff)      shift; cmd_diff "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "unknown command '$1'" ;;
+  esac
+}
+
+# run only when executed, so tests can source the functions
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"
