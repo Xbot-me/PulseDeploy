@@ -332,7 +332,10 @@ cmd_record() {
       local id dir
       id="$(cat "$LT_STATE/active")"; dir="$LT_STATE/$id"
       if [[ -n "$results" ]]; then
-        jq -e . "$results" >/dev/null 2>&1 || die "--results: not a readable JSON file ($results)"
+        [[ -e "$results" ]] || die "--results: $results does not exist. Copy summary.json from the load generator first (scp loadtest/results/<time>/summary.json user@server:)."
+        [[ -s "$results" ]] || die "--results: $results is empty."
+        local jerr
+        jerr="$(jq -e . "$results" 2>&1 >/dev/null)" || die "--results: $results is not valid JSON (${jerr:-unreadable}). Is it the summary.json written by loadtest/run.sh?"
       fi
       local p
       for p in vmstat sampler; do
