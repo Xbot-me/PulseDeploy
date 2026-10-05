@@ -119,6 +119,10 @@ lnx_create_dirs() {
     "$LNX_APPS_ROOT/api/shared/storage/framework/views" \
     "$LNX_APPS_ROOT/api/shared/storage/logs" \
     "$LNX_APPS_ROOT/admin/shared/next-cache" "$LNX_APPS_ROOT/shop/shared/next-cache"
+  # install -d gives the owner only to the directories it is asked for, not to the parents it
+  # creates on the way (storage/, storage/app, storage/framework, ...), which stayed root-owned
+  # and made them unwritable for the app. Own the whole storage tree.
+  chown -R "$APP_USER:$APP_USER" "$LNX_APPS_ROOT/api/shared/storage"
   install -d -m 755 "$LNX_ETC"
 }
 
