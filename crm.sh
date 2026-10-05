@@ -195,7 +195,7 @@ load_definitions() {
   local file
   file="$(find_def crm "$CRM_ID")" || error "Unknown CRM '$CRM_ID' (definitions: $(for f in "$ROOT"/apps/crm/*.conf; do basename "$f" .conf; done | tr '\n' ' '))"
   registry_load "$file" CD \
-    "NAME REPO REF BACKEND_DIR ADMIN_DIR DB_NAME DB_USER TENANT_DB_PREFIX STORE_EXISTS_TEXT ADMIN_LOGIN_PATH ADMIN_LOGIN_HEADER" \
+    "NAME REPO REF BACKEND_DIR ADMIN_DIR DB_NAME DB_USER TENANT_DB_PREFIX STORE_EXISTS_TEXT ADMIN_LOGIN_PATH ADMIN_LOGIN_HEADER SMOKE_INFO_PATH SMOKE_STORE_NAME" \
     "SERVER_OPT BACKEND_ENV ADMIN_BUILD_ENV ADMIN_RUNTIME_ENV STORE_ARG"
   [[ -z "$CRM_REPO_OVERRIDE" ]] || CD_REPO="$CRM_REPO_OVERRIDE"
   [[ -z "$CRM_REF_OVERRIDE" ]]  || CD_REF="$CRM_REF_OVERRIDE"
@@ -357,6 +357,7 @@ load_server_facts() {
   [[ -r /etc/pulsedeploy/pulse.conf ]] || error "The server is not provisioned (no /etc/pulsedeploy/pulse.conf). Run install without --skip-server."
   # shellcheck source=/dev/null
   source /etc/pulsedeploy/pulse.conf
+  command -v jq >/dev/null || error "jq is required (sudo apt install jq, or sudo dnf install jq) - the smoke tests read JSON."
   CRM_PHP_BIN="${PHP_BIN:-php}"
   APP_USER="${APP_USER:-deploy}"
   [[ -z "${INTERNAL_API_URL:-}" ]] || CRM_VARS[INTERNAL_API_URL]="$INTERNAL_API_URL"
@@ -446,27 +447,80 @@ EOF
   esac
 }
 
+SMOKE_FAILED=()
+smoke_fail() { SMOKE_FAILED+=("$1"); warn "$1"; }
+
+# HTTP checks against the local nginx; each failure is remembered by name
 smoke_tests() {
   section "Smoke tests"
-  local fails=0 code
+  SMOKE_FAILED=()
+  local code
   check() { # check <label> <code> <ok-pattern>
-    if [[ "$2" =~ $3 ]]; then log "$1: HTTP $2"; else warn "$1: HTTP $2 (expected $3)"; fails=$((fails + 1)); fi
+    if [[ "$2" =~ $3 ]]; then log "$1: HTTP $2"; else smoke_fail "$1: HTTP $2 (expected $3)"; fi
   }
-  code="$(crm_http_code "$API_HOST" /up)"; check "API" "$code" '^(2|3|4)[0-9][0-9]$'
+  code="$(crm_http_code "$API_HOST" /up)"; check "API health (/up)" "$code" '^2[0-9][0-9]$'
+
+  # A real read of the tenant database through the API, not only "nginx answers"
+  if [[ -n "${CD_SMOKE_INFO_PATH:-}" ]]; then
+    local body name hcode
+    body="$(curl -s -m 20 -w '\n%{http_code}' -H "Host: ${API_HOST}" -H "X-Store-Subdomain: ${STORE}" "${CRM_LOCAL_URL:-http://127.0.0.1}${CD_SMOKE_INFO_PATH}" 2>/dev/null || true)"
+    hcode="${body##*$'\n'}"; body="${body%$'\n'*}"
+    if [[ "$hcode" != 200 ]]; then
+      smoke_fail "Store info (${CD_SMOKE_INFO_PATH}): HTTP ${hcode:-000} (the API cannot read the tenant database?)"
+    elif jq -e . >/dev/null 2>&1 <<<"$body"; then
+      name="$(jq -r '(.data.name // .name // empty)' <<<"$body")"
+      if [[ -z "$name" ]]; then
+        smoke_fail "Store info (${CD_SMOKE_INFO_PATH}): no store name in the response"
+      elif [[ "${CD_SMOKE_STORE_NAME:-0}" == "1" && "$name" != "$STORE_NAME" ]]; then
+        smoke_fail "Store info: name is '${name}', expected '${STORE_NAME}'"
+      else
+        log "Store info read from the tenant database: ${name}"
+      fi
+    else
+      smoke_fail "Store info (${CD_SMOKE_INFO_PATH}): not a JSON answer"
+    fi
+  fi
+
+  if ! printf '%s' "${CD_SERVER_OPT[*]}" | grep -q -- '--no-scheduler'; then
+    if systemctl is-active --quiet pulse-scheduler.timer; then
+      log "Scheduler timer: active"
+    else
+      smoke_fail "Scheduler timer pulse-scheduler.timer is not active"
+    fi
+  fi
+
+  if [[ "$CERTBOT" -eq 1 ]]; then
+    local h
+    for h in "$API_HOST" "$ADMIN_HOST"; do
+      if curl -s -o /dev/null -m 20 --resolve "${h}:443:127.0.0.1" "https://${h}/" 2>/dev/null; then
+        log "TLS certificate valid: ${h}"
+      else
+        smoke_fail "TLS: https://${h} failed certificate validation (is DNS pointing here?)"
+      fi
+    done
+  fi
+
   if component_selected admin; then
     code="$(crm_http_code "$ADMIN_HOST" /login)"; check "Admin app" "$code" '^(2|3)[0-9][0-9]$'
     if [[ -n "$ADMIN_PASSWORD" && -n "$CD_ADMIN_LOGIN_PATH" ]]; then
       local hdr
       hdr="$(crm_expand "$CD_ADMIN_LOGIN_HEADER")"
       code="$(crm_http_code "$ADMIN_HOST" "$CD_ADMIN_LOGIN_PATH" -X POST -H "$hdr" -H 'Content-Type: application/json' \
-        --data "$(printf '{"email":"%s","password":"%s"}' "$ADMIN_EMAIL" "$ADMIN_PASSWORD")")"
+        --data "$(jq -cn --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email:$e,password:$p}')")"
       check "Admin login (through the app to the tenant database)" "$code" '^200$'
     fi
   fi
   if [[ "$SF_NAME" != "none" ]] && component_selected storefront; then
     code="$(crm_http_code "$SHOP_HOST" /)"; check "Storefront" "$code" '^(2|3)[0-9][0-9]$'
+    if [[ "${CD_SMOKE_STORE_NAME:-0}" == "1" ]]; then
+      if curl -s -m 20 -H "Host: ${SHOP_HOST}" "${CRM_LOCAL_URL:-http://127.0.0.1}/" 2>/dev/null | grep -qF -- "$STORE_NAME"; then
+        log "Storefront shows the store name"
+      else
+        smoke_fail "Storefront page does not contain the store name '${STORE_NAME}'"
+      fi
+    fi
   fi
-  return "$fails"
+  return "${#SMOKE_FAILED[@]}"
 }
 
 save_state() {
@@ -494,6 +548,19 @@ save_state() {
 cleanup_work() {
   [[ -d "$CRM_WORK/src" ]] && rm -rf -- "${CRM_WORK:?}/src"/* "${CRM_WORK:?}/artifacts"/* 2>/dev/null
   return 0
+}
+
+smoke_failure_report() {
+  section "NOT successful: ${#SMOKE_FAILED[@]} check(s) failed"
+  local f
+  for f in "${SMOKE_FAILED[@]}"; do printf '  - %s\n' "$f"; done
+  cat <<MSG
+
+  The server is installed but is not serving correctly. Look with:
+    pulse status        pulse logs <api|admin|shop|php|nginx>
+  Fix the cause and re-run the same command (it is safe to repeat).
+  Details: ${CRM_LOG}
+MSG
 }
 
 print_summary() {
@@ -558,8 +625,11 @@ cmd_install() {
   smoke_tests || rc=$?
   save_state
   cleanup_work
+  if [[ "$rc" -ne 0 ]]; then
+    smoke_failure_report
+    return 1
+  fi
   print_summary
-  [[ "$rc" -eq 0 ]] || warn "$rc smoke test(s) failed; run 'pulse status' and 'pulse logs <target>'."
   return 0
 }
 
@@ -596,7 +666,8 @@ cmd_update() {
   local rc=0
   smoke_tests || rc=$?
   cleanup_work
-  if [[ "$rc" -eq 0 ]]; then log "Update complete."; else warn "$rc smoke test(s) failed."; fi
+  if [[ "$rc" -ne 0 ]]; then smoke_failure_report; return 1; fi
+  log "Update complete."
   return 0
 }
 
@@ -606,8 +677,8 @@ main() {
   if [[ "${1:-}" == "retune" ]]; then shift; exec bash "$ROOT/scripts/retune.sh" "$@"; fi
   parse_args "$@"
   case "$CMD" in
-    install)      cmd_install ;;
-    update)       cmd_update ;;
+    install)      cmd_install || exit $? ;;
+    update)       cmd_update || exit $? ;;
     storefronts)  list_storefronts ;;
     status)       exec pulse status ;;
     version|--version) echo "crm.sh v${CRM_VERSION}" ;;

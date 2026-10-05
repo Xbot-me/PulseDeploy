@@ -27,8 +27,10 @@ sudo bash crm.sh install \
    itself if the health check fails.
 4. **Creates the first store** and its admin login. The generated password goes to
    `/root/pulsedeploy-crm-credentials.txt` (root only), never to the log.
-5. **Smoke-tests** the API, the admin (including a real login through to the store's
-   database) and the storefront, and prints the URLs.
+5. **Smoke-tests** the API, a real read of the store's database through the API, the admin
+   (including a real login), the storefront, the scheduler timer and (with `--certbot`) the
+   certificates. If **any** check fails the command lists exactly which, prints no success
+   banner and exits non-zero, so CI and scripts notice. Fix the cause and re-run it.
 
 Re-running is safe: existing `.env` values are kept (`--reset-env` to overwrite),
 an existing store is left alone, and deployed releases are replaced only after a

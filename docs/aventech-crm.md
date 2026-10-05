@@ -15,7 +15,7 @@ sudo bash bootstrap.sh --stack laravel-next --domain example.com \
   --email you@example.com --services certbot --cloudflare \
   --db-name zymerce_crm --db-user zymerce \
   --tenant-db-prefix zymerce_tenant_ \
-  --serve-storage --no-queue --no-scheduler --non-interactive
+  --serve-storage --no-queue --non-interactive
 ```
 
 What the options do for this app:
@@ -25,7 +25,7 @@ What the options do for this app:
 | `--db-name` / `--db-user` | match the repository's `.env.example` |
 | `--tenant-db-prefix zymerce_tenant_` | `php artisan store:create` runs `CREATE DATABASE` through the app's own DB user; this grants exactly `zymerce_tenant_*` and nothing else, and raises MySQL's table caches for many tenants |
 | `--serve-storage` | uploaded product media (Laravel `public` disk) is served by nginx from disk on the admin and storefront hosts, so `/storage/*` never touches Node |
-| `--no-queue`, `--no-scheduler` | the app has no queued jobs or scheduled tasks; saves a worker process and a per-minute PHP start |
+| `--no-queue` | the app has no queued jobs; saves a worker process. The scheduler timer stays on: the CRM schedules its own cleanup commands (a run with nothing scheduled costs one short PHP start a minute) |
 
 The admin app reaches the API without leaving the machine, at
 `http://127.0.0.1:8081` (a loopback-only nginx listener: no TLS, no Cloudflare

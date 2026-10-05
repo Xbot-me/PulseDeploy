@@ -11,7 +11,7 @@ os_update() {
 }
 
 os_install_base() {
-  local pkgs=(wget git unzip zip ca-certificates net-tools logrotate cronie tar gzip)
+  local pkgs=(wget git unzip zip jq ca-certificates net-tools logrotate cronie tar gzip)
   # AL2023 ships curl-minimal, which conflicts with the full curl package.
   command -v curl &>/dev/null || pkgs+=(curl)
   retry 3 5 pm_rpm install -y -q "${pkgs[@]}"
