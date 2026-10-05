@@ -239,3 +239,25 @@ compare `pulse-lt record` runs before and after.
 
 Deploy note for PulseDeploy users: `migrate` only migrates the central database. `pulse deploy api` now also runs
 `tenants:migrate` when the application has it, otherwise existing stores never receive migrations like this one.
+
+## 9. Benchmark L-004 on the VM: CRM 288396a (indexes + cache + no stampede), `medium` profile
+
+Same test as L-003. **PASS: 55,800 requests, 0 failed, worst p95 790 ms** (L-003: 17,000 ms), 150 users at four times speed
+for 37 minutes, no breakpoint found. Orders list p95 360 ms, dashboard p95 600 ms (p99 2,000 ms), orders by status p95 790 ms.
+Redis 29,372 commands, 13,188 hits, 16 misses: the cache is doing its job.
+
+What remains, from the slow-query log (1,474 queries over 200 ms in 37 minutes, all cache refreshes):
+
+* `select COALESCE(SUM(c = 1), 0) AS fresh, COALESCE(SUM(c > 1), 0) AS repeaters from (select customer_phone, COUNT(*) ...)`
+  1.9 to 3.6 s, and the order-summary lines query (`SUM(qty)`, `COUNT(DISTINCT product_id)`) 2.2 to 2.3 s. With 103 temporary
+  tables written to disk during the run.
+* The p99 tail (dashboard 2.0 s, orders by status 1.5 s) is whoever lands on a refresh, while a refresh is also using one core.
+
+Ideas, in order of effort:
+
+1. Refresh in the background instead of inside a user request: the Laravel scheduler already runs every minute on the
+   server (`pulse-scheduler.timer`), so a scheduled command can warm the default dashboard and order-list summaries for
+   large stores, and nobody waits for them.
+2. For stores far above `cache_over_orders` (for example over 100,000 orders) use a longer `cache_seconds` (60 to 120).
+3. Make the new-versus-repeat-customer figure cheaper (it groups the whole orders table by phone every time) or compute it
+   from a maintained counter.

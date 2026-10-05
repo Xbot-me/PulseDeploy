@@ -94,3 +94,24 @@ Use one or the other for a store, not both. On a disposable test server whose on
   profile it (Xdebug, Blackfire, SPX) rather than guess.
 * MySQL's slow-query threshold is changed for the duration of the recording and put back by `record stop`.
   If a recording is abandoned, run `sudo pulse-lt record stop` anyway.
+
+## Results so far: AvenTech CRM on 2 vCPU / 4 GB (Amazon Linux 2023, VMware)
+
+Every run: `loadtest/run.sh --profile breakpoint --time-scale 0.25 --step-users 10 --step-seconds 120`, aggregate of the
+admin scenario (people at four times normal speed, so 150 users is roughly 600 ordinary staff), rate limits lifted.
+Client p95 values are Locust's rounded buckets.
+
+| Run | CRM | Data | Requests | Failed | Worst p95 | Dashboard p95 | Orders list p95 | CPU peak | Outcome |
+|---|---|---|---|---|---|---|---|---|---|
+| L-002 | before the reporting changes | 10k orders | 54,598 | 0 | 670 ms | 670 ms | 390 ms | 97% | PASS, no breakpoint found |
+| L-003 | before the reporting changes | 200k orders | 676 | 0 | 17,000 ms | 17,000 ms | 11,000 ms | 100% | FAIL at the first step (about 10 users) |
+| L-004 | 288396a (indexes, cache, no stampede) | 200k orders | 55,800 | 0 | 790 ms | 600 ms | 360 ms | 100% | PASS, no breakpoint found |
+
+* L-003 stopped after 515 s at the first step, L-004 ran all steps (up to 150 users) for 37 minutes, so the improvement is
+  larger than the table suggests.
+* L-004 server side: nginx API p50 82 ms / p95 355 ms / p99 963 ms; MySQL 1,474 slow queries (the two cache-refresh
+  aggregates, 1.9 to 3.6 s each); Redis 29,372 commands with 13,188 hits and 16 misses (the cache works); peak memory
+  2.3 GB of 3.9 GB, no swap, no I/O wait.
+* What is left: the p99 of the dashboard (2.0 s) and the status-filtered list (1.5 s) are requests that land on a cache
+  refresh while both cores are busy, and CPU still touches 100% at the top of the ramp. No step failed, so the real
+  breakpoint of this server has not been found yet (next: `--max-users 400`, or the `large` profile).
