@@ -55,6 +55,9 @@ case "$CASE" in
   seed)
     printf 'STORE=main\n' >"$CRM_CONF"
     "$LT" seed main --yes >/dev/null 2>&1 && no "seeding the live store must be refused"
+    "$LT" seed main --force --yes >/dev/null 2>&1 || no "--force must allow the installed store on a test server"
+    grep -q 'loadtest:seed main .* --force' "$T/log" || no "--force not passed on to the CRM"
+    : >"$T/log"
     "$LT" seed 'bad;slug' --yes >/dev/null 2>&1 && no "bad slug accepted"
     "$LT" seed lt1 --profile huge --yes >/dev/null 2>&1 && no "bad profile accepted"
     "$LT" seed lt1 --as-of tomorrow --yes >/dev/null 2>&1 && no "bad date accepted"
