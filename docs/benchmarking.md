@@ -82,7 +82,8 @@ Checked for real against the CRM: with the limits on, the 6th wrong login within
   is not `loadtest` or `demo`. It needs a CRM commit that has the command.
 * `loadtest/seed/seed.sh` fills the order tables with plain SQL and works with any CRM version, but has no behaviour events.
 
-Use one or the other for a store, not both.
+Use one or the other for a store, not both. On a disposable test server whose only store is the one `crm.sh` installed
+(plan `standard`), add `--force`: `sudo pulse-lt seed <store> --profile small --force`. Never on a client's server.
 
 ## Limits of what this measures
 

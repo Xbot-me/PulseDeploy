@@ -3,7 +3,7 @@
 # pulse-lt - server side of a load-test run on a PulseDeploy Laravel + Next.js server
 #
 #   pulse-lt status                          what is configured right now
-#   pulse-lt seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--yes]
+#   pulse-lt seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--force] [--yes]
 #   pulse-lt throttles off [--for MINUTES]   lift the app's per-IP rate limits (LOADTEST_MODE), auto-restore
 #   pulse-lt throttles on                    put the server back as it was
 #   pulse-lt record start <id> [--note TEXT] snapshot the server, start sampling
@@ -96,13 +96,14 @@ cmd_seed() {
   need_root seed; need_jq
   local store="${1:-}"; [[ -n "$store" && "$store" != --* ]] || die "usage: pulse-lt seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--yes]"
   shift
-  local profile=small seed=42 asof="" reset=0 yes=0
+  local profile=small seed=42 asof="" reset=0 yes=0 force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --profile) profile="${2:?}"; shift 2 ;;
       --seed)    seed="${2:?}"; shift 2 ;;
       --as-of)   asof="${2:?}"; shift 2 ;;
       --reset)   reset=1; shift ;;
+      --force)   force=1; shift ;;   # a disposable test server whose only store is the one being filled
       --yes|-y)  yes=1; shift ;;
       *) die "unknown option $1" ;;
     esac
@@ -111,16 +112,17 @@ cmd_seed() {
   [[ "$profile" =~ ^(small|medium|large)$ ]] || die "--profile must be small, medium or large"
   [[ "$seed" =~ ^[0-9]+$ ]] || die "--seed must be a number"
   [[ -z "$asof" || "$asof" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "--as-of must be YYYY-MM-DD"
-  [[ "$store" != "$(live_store)" ]] || die "'$store' is the live store from $CRM_CONF. Seed a disposable store (plan=loadtest)."
+  [[ "$store" != "$(live_store)" || $force -eq 1 ]] || die "'$store' is the store installed by crm.sh ($CRM_CONF). On a disposable test server add --force; otherwise seed a separate store (plan=loadtest)."
   artisan list --raw 2>/dev/null | grep -q '^loadtest:seed' || die "this CRM release has no loadtest:seed (deploy a CRM commit that has it)"
   if [[ $yes -eq 0 ]]; then
     [[ -t 0 ]] || die "not a terminal: pass --yes"
-    read -r -p "Fill store '$store' with FAKE $profile data? Type the store name: " a
+    read -r -p "Fill store '$store' with FAKE $profile data$([[ $force -eq 1 ]] && echo ' (--force: its plan is not checked)')? Type the store name: " a
     [[ "$a" == "$store" ]] || die "not confirmed"
   fi
   local -a args=(loadtest:seed "$store" "--profile=$profile" "--seed=$seed" --json)
   [[ -z "$asof" ]] || args+=("--as-of=$asof")
   [[ $reset -eq 0 ]] || args+=(--reset)
+  [[ $force -eq 0 ]] || args+=(--force)
   # The seeder refuses APP_ENV=production. Only this one process is told otherwise (--env); the server's
   # own configuration is not touched. The line before the JSON object is dropped if the app prints one.
   local out
