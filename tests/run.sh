@@ -546,6 +546,7 @@ check "pulse-lt: an existing LOADTEST_MODE line is restored"     lt keeps-existi
 check "pulse-lt: refuses a CRM without LOADTEST_MODE, no change"  lt old-crm
 check "pulse-lt: seed validates, refuses the live store, passes options" lt seed
 check "pulse-lt: diff lists only what changed"                   lt diff
+check "pulse-lt: nginx percentiles come from new bytes only, per log" lt nginx
 check "pulse-lt: usage and bad input"                            lt usage
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run

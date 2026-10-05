@@ -69,7 +69,7 @@ case "$CASE" in
     mk() { jq -n --arg id "$1" --argjson conns "$2" --argjson p95 "$3" \
       '{id:$id, environment:{vm:{vcpu:2}, versions:{php:"8.3"}, commits:{crm_commit:"abc"}},
         config:{settings:{mysql:{max_connections:$conns}}, dataset:{seed:42}},
-        server:{nginx_api:{p95_ms:$p95}, cpu_io:{cpu_user_pct_avg:10, cpu_system_pct_avg:5}},
+        server:{nginx:{"pulse-api.access.log":{p95_ms:$p95}}, cpu_io:{cpu_user_pct_avg:10, cpu_system_pct_avg:5}},
         client:{total:100, failed:0, worst_p95_ms:$p95, endpoints:[{name:"GET /x", requests:100, failures:0, p50_ms:10, p95_ms:$p95, p99_ms:90}]}}'; }
     mk a 150 300 >"$T/a.json"; mk b 300 200 >"$T/b.json"
     out="$("$LT" diff "$T/a.json" "$T/b.json" 2>&1)"
@@ -77,6 +77,23 @@ case "$CASE" in
     ! grep -q 'vcpu' <<<"$out" || no "an unchanged value was listed as a difference"
     grep -q 'GET /x .*300 -> 200' <<<"$out" || no "endpoint p95 change not shown"
     "$LT" render_md >/dev/null 2>&1 && no "unknown command accepted"
+    ;;
+  nginx)
+    # statistics only from the bytes written after the offset, per log
+    mkdir -p "$T/ng"; export NGINX_LOG_DIR="$T/ng"
+    printf '1.1.1.1 "GET /old HTTP/1.1" 200 5 rt=9.999 urt=1 "ua"\n' >"$T/ng/pulse-api.access.log"
+    printf '1.1.1.1 "GET /other HTTP/1.1" 200 5 "no timing here"\n' >"$T/ng/pulse-shop.access.log"
+    # shellcheck source=/dev/null
+    source "$LT"
+    trap - ERR
+    offs="$(nginx_offsets_json)"
+    for i in $(seq 1 100); do printf '1.1.1.1 "GET /x HTTP/1.1" %s 9 rt=0.%03d urt=0.1 "ua"\n' "$([ $((i%10)) -eq 0 ] && echo 429 || echo 200)" "$i" >>"$T/ng/pulse-api.access.log"; done
+    out="$(nginx_all_json "$offs")"
+    [[ "$(jq -r '."pulse-api.access.log".requests' <<<"$out")" == 100 ]] || no "requests counted from the wrong offset: $out"
+    [[ "$(jq -r '."pulse-api.access.log".p50_ms' <<<"$out")" == 50 ]] || no "p50 wrong: $out"
+    [[ "$(jq -r '."pulse-api.access.log".p95_ms' <<<"$out")" == 95 ]] || no "p95 wrong: $out"
+    [[ "$(jq -r '."pulse-api.access.log".status["429"]' <<<"$out")" == 10 ]] || no "429 count wrong: $out"
+    [[ "$(jq -r 'has("pulse-shop.access.log")' <<<"$out")" == false ]] || no "a log without timing was reported"
     ;;
   usage)
     "$LT" help 2>&1 | grep -q 'pulse-lt record start' || no "help text missing"
