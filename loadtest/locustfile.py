@@ -3,7 +3,7 @@
 Do not run this directly; use loadtest/run.sh, which sets the environment this
 file reads (LT_*) and asks for confirmation before generating any load.
 
-How a virtual user behaves (see docs/load-testing.md):
+How a virtual user behaves (see the README, "Load testing and benchmarks"):
   setup      logs in once (a human does not log in on every click)
   a visit    a few "journeys" picked by weight, with human pauses between steps
   drop-off   after a step a person may leave (step "continue_p")
