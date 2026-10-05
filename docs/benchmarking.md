@@ -38,6 +38,7 @@ Back on the server:
 ```bash
 sudo pulse-lt record stop --results ~/summary.json     # writes benchmark-L-001.json and .md
 sudo pulse-lt throttles on                              # always: puts the server back as it was
+sudo pulse-lt record attach L-001 --results ~/summary.json   # only if you stopped the record without (or with the wrong) results
 sudo pulse-lt diff /var/lib/pulsedeploy/lt/L-001/benchmark-L-001.json /var/lib/pulsedeploy/lt/L-002/benchmark-L-002.json
 ```
 

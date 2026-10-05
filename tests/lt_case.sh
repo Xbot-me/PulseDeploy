@@ -99,6 +99,18 @@ case "$CASE" in
     [[ "$(jq -r '."pulse-api.access.log".status["429"]' <<<"$out")" == 10 ]] || no "429 count wrong: $out"
     [[ "$(jq -r 'has("pulse-shop.access.log")' <<<"$out")" == false ]] || no "a log without timing was reported"
     ;;
+  attach)
+    mkdir -p "$T/state/L-9"
+    jq -n '{id:"L-9", note:"", started:"x", duration_s:1, environment:{vm:{vcpu:2,ram_mb:1,provider:"p",os:"o"},versions:{},commits:{crm_commit:"c",crm_ref:"r",pulsedeploy_commit:"p"}},
+            config:{dataset:null, loadtest_mode:null}, server:{nginx:{}, mysql:{}, redis:{}, slow_queries:{count:0,worst:[]}},
+            client:{total:1, failed:1, worst_p95_ms:1, problems:["old"], endpoints:[]}}' >"$T/state/L-9/benchmark-L-9.json"
+    echo '{"total":500,"failed":0,"worst_p95_ms":120,"problems":[],"endpoints":[{"name":"GET /x","requests":500,"failures":0,"p50_ms":5,"p95_ms":120,"p99_ms":130}]}' >"$T/new.json"
+    "$LT" record attach L-9 --results "$T/new.json" >/dev/null 2>&1 || no "attach failed"
+    [[ "$(jq -r .client.total "$T/state/L-9/benchmark-L-9.json")" == 500 ]] || no "results not replaced"
+    grep -q 'GET /x | 500 | 0' "$T/state/L-9/benchmark-L-9.md" || no "markdown not re-rendered"
+    "$LT" record attach L-9 --results /nonexistent >/dev/null 2>&1 && no "attach accepted a missing file"
+    "$LT" record attach nope --results "$T/new.json" >/dev/null 2>&1 && no "attach accepted an unknown record"
+    ;;
   usage)
     "$LT" help 2>&1 | grep -q 'pulse-lt record start' || no "help text missing"
     "$LT" bogus >/dev/null 2>&1 && no "unknown command accepted"

@@ -8,6 +8,7 @@
 #   pulse-lt throttles on                    put the server back as it was
 #   pulse-lt record start <id> [--note TEXT] snapshot the server, start sampling
 #   pulse-lt record stop  [--results FILE]   stop, add the load generator's summary.json, write the record
+#   pulse-lt record attach <id> --results F  replace the load generator's results of a finished record
 #   pulse-lt diff <a.json> <b.json>          what differs between two records
 #
 # The traffic itself comes from another machine (loadtest/run.sh). Only run this on a server you own,
@@ -452,7 +453,24 @@ cmd_record() {
       say "Record written: $dir/benchmark-$id.json and .md"
       cat "$dir/benchmark-$id.md"
       ;;
-    *) die "usage: pulse-lt record start <id> [--note TEXT] | stop [--results summary.json]" ;;
+    attach)
+      # add (or replace) the load generator's summary of a record that is already written
+      local aid="${1:-}"; shift || true
+      local afile=""
+      while [[ $# -gt 0 ]]; do case "$1" in --results) afile="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
+      [[ -n "$aid" && -n "$afile" ]] || die "usage: pulse-lt record attach <id> --results summary.json"
+      local rec="$LT_STATE/$aid/benchmark-$aid.json"
+      [[ -f "$rec" ]] || die "no finished record '$aid' ($rec)"
+      [[ -s "$afile" ]] || die "--results: $afile is missing or empty"
+      local aerr
+      aerr="$(jq -e . "$afile" 2>&1 >/dev/null)" || die "--results: $afile is not valid JSON ($aerr)"
+      jq --slurpfile c "$afile" '.client = $c[0]' "$rec" >"$rec.new" && mv "$rec.new" "$rec"
+      render_md "$rec" >"$LT_STATE/$aid/benchmark-$aid.md"
+      chmod 600 "$rec" "$LT_STATE/$aid/benchmark-$aid.md"
+      say "Load-generator results of '$aid' replaced from $afile"
+      cat "$LT_STATE/$aid/benchmark-$aid.md"
+      ;;
+    *) die "usage: pulse-lt record start <id> [--note TEXT] | stop [--results summary.json] | attach <id> --results summary.json" ;;
   esac
 }
 
