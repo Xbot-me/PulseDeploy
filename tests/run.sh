@@ -524,6 +524,13 @@ printf '\033[200~secret~' >"$TMP/pw-bad"; printf 'secret' >"$TMP/pw-good"
 check_not "loadtest/run.sh rejects a password file with paste markers" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-bad" --check
 check "loadtest/run.sh accepts a clean password file"  bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --password-file "$TMP/pw-good" --check
 check "loadtest/run.sh --check validates and sends nothing" bash "$ROOT/loadtest/run.sh" --ip 1.2.3.4 --domain x.test --scenario aventech-admin:1,aventech-storefront:3 --check
+echo "── crm.sh: smoke tests report failures by name"
+sc() { bash "$ROOT/tests/smoke_case.sh" "$@"; }
+check     "smoke: healthy install passes (store name checked)" sc ok 1
+check     "smoke: healthy install passes (name not checked)"   sc ok 0
+check_not "smoke: unreadable tenant database fails"            sc dbdown 0
+check_not "smoke: refused admin login fails"                   sc badlogin 0
+check_not "smoke: inactive scheduler timer fails"              sc ok 0 inactive
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
 check_not "seed.sh rejects an unknown flag"           bash "$ROOT/loadtest/seed/seed.sh" --store t --bogus

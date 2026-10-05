@@ -15,7 +15,7 @@ os_install_base() {
   # software-properties-common was removed from Debian 13 (Trixie) and nothing
   # here calls add-apt-repository, so it is only installed on Debian 11/12.
   local base_pkgs=(
-    curl wget git unzip zip
+    curl wget git unzip zip jq
     ca-certificates gnupg lsb-release
     apt-transport-https
     htop net-tools build-essential

@@ -271,7 +271,7 @@ crm_store_create() {
 crm_http_code() { # crm_http_code <host> <path> [curl args...]
   local host="$1" path="$2"
   shift 2
-  curl -s -o /dev/null -m 20 -w '%{http_code}' -H "Host: ${host}" "$@" "http://127.0.0.1${path}" 2>/dev/null || printf '000'
+  curl -s -o /dev/null -m 20 -w '%{http_code}' -H "Host: ${host}" "$@" "${CRM_LOCAL_URL:-http://127.0.0.1}${path}" 2>/dev/null || printf '000'
 }
 
 # ── remembered configuration (for `update`) ───────────────────────────────────
