@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015  # "A && B || fail" is how these checks read
-# Exercises bin/pulse-lt with a fake "php artisan" (no database, no services).   lt_case.sh <case>
+# Exercises bin/pulse-bench with a fake "php artisan" (no database, no services).   bench_case.sh <case>
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CASE="$1"
@@ -26,10 +26,10 @@ EOF
 chmod +x "$T/fakephp"
 printf 'APP_ENV=production\nAPP_DEBUG=false\nDB_HOST=localhost\n' >"$T/api/.env"
 cp "$T/api/.env" "$T/env.orig"
-export PULSE_CONF=/dev/null CRM_CONF="$T/crm.conf" PULSE_LT_ALLOW_NONROOT=1 NO_COLOR=1
+export PULSE_CONF=/dev/null CRM_CONF="$T/crm.conf" PULSE_BENCH_ALLOW_NONROOT=1 NO_COLOR=1
 APP_USER="$(id -un)"
-export APP_USER PHP_BIN="$T/fakephp" API_CURRENT="$T/api" API_ENV="$T/api/.env" PULSE_LT_STATE="$T/state" FAKE_LOG="$T/log"
-LT="$ROOT/bin/pulse-lt"
+export APP_USER PHP_BIN="$T/fakephp" API_CURRENT="$T/api" API_ENV="$T/api/.env" PULSE_BENCH_STATE="$T/state" FAKE_LOG="$T/log"
+LT="$ROOT/bin/pulse-bench"
 fail=0; no() { echo "$1"; fail=1; }
 
 case "$CASE" in
@@ -64,7 +64,7 @@ case "$CASE" in
     "$LT" seed lt1 --profile small --seed 7 --as-of 2026-10-01 --reset --yes >/dev/null 2>&1 || no "valid seed failed"
     grep -q 'loadtest:seed lt1 --profile=small --seed=7 --json --as-of=2026-10-01 --reset --env=staging' "$T/log" || no "seed arguments wrong: $(cat "$T/log" 2>/dev/null)"
     grep -q '^APP_ENV=production' "$T/api/.env" || no "seeding must not change the server's own APP_ENV"
-    [[ "$(jq -r .status "$T/state/dataset.json" 2>/dev/null)" == seeded ]] || no "the dataset description was not saved by pulse-lt"
+    [[ "$(jq -r .status "$T/state/dataset.json" 2>/dev/null)" == seeded ]] || no "the dataset description was not saved by pulse-bench"
     [[ "$(stat -c %a "$T/state/dataset.json")" == 600 ]] || no "dataset.json is not mode 600"
     # shellcheck source=/dev/null
     ( source "$LT"; trap - ERR; [[ "$(dataset_json | jq -r .status)" == seeded ]] ) || no "record would not pick up the saved description"
@@ -112,7 +112,7 @@ case "$CASE" in
     "$LT" record attach nope --results "$T/new.json" >/dev/null 2>&1 && no "attach accepted an unknown record"
     ;;
   usage)
-    "$LT" help 2>&1 | grep -q 'pulse-lt record start' || no "help text missing"
+    "$LT" help 2>&1 | grep -q 'pulse-bench record start' || no "help text missing"
     "$LT" bogus >/dev/null 2>&1 && no "unknown command accepted"
     "$LT" record start 'bad id' >/dev/null 2>&1 && no "bad record id accepted"
     ;;

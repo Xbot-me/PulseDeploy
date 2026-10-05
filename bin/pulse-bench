@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# pulse-lt - server side of a load-test run on a PulseDeploy Laravel + Next.js server
+# pulse-bench - server side of a load-test run on a PulseDeploy Laravel + Next.js server
 #
-#   pulse-lt status                          what is configured right now
-#   pulse-lt seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--force] [--yes]
-#   pulse-lt throttles off [--for MINUTES]   lift the app's per-IP rate limits (LOADTEST_MODE), auto-restore
-#   pulse-lt throttles on                    put the server back as it was
-#   pulse-lt record start <id> [--note TEXT] snapshot the server, start sampling
-#   pulse-lt record stop  [--results FILE]   stop, add the load generator's summary.json, write the record
-#   pulse-lt record attach <id> --results F  replace the load generator's results of a finished record
-#   pulse-lt diff <a.json> <b.json>          what differs between two records
+#   pulse-bench status                          what is configured right now
+#   pulse-bench seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--force] [--yes]
+#   pulse-bench throttles off [--for MINUTES]   lift the app's per-IP rate limits (LOADTEST_MODE), auto-restore
+#   pulse-bench throttles on                    put the server back as it was
+#   pulse-bench record start <id> [--note TEXT] snapshot the server, start sampling
+#   pulse-bench record stop  [--results FILE]   stop, add the load generator's summary.json, write the record
+#   pulse-bench record attach <id> --results F  replace the load generator's results of a finished record
+#   pulse-bench diff <a.json> <b.json>          what differs between two records
 #
 # The traffic itself comes from another machine (loadtest/run.sh). Only run this on a server you own,
 # and only against a disposable store: seeding fills it with fake data.
@@ -27,7 +27,11 @@ PHP_BIN="${PHP_BIN:-php}"
 PHP_FPM_SVC="${PHP_FPM_SVC:-php-fpm}"
 API_CURRENT="${API_CURRENT:-$APPS_ROOT/api/current}"
 API_ENV="${API_ENV:-$APPS_ROOT/api/shared/.env}"
-LT_STATE="${PULSE_LT_STATE:-/var/lib/pulsedeploy/lt}"
+LT_STATE="${PULSE_BENCH_STATE:-}"
+if [[ -z "$LT_STATE" ]]; then # records made under the tool's earlier name (pulse-lt) stay where they are
+  LT_STATE=/var/lib/pulsedeploy/bench
+  [[ ! -d /var/lib/pulsedeploy/lt || -d /var/lib/pulsedeploy/bench ]] || LT_STATE=/var/lib/pulsedeploy/lt
+fi
 LT_ENV_BACKUP="$LT_STATE/env-backup"
 NGINX_LOG_DIR="${NGINX_LOG_DIR:-/var/log/nginx}"   # every pulse-*.access.log in it is measured
 SLOW_MS="${SLOW_MS:-200}"
@@ -44,7 +48,7 @@ warn() { printf '%s\n' "${YELLOW}[warn]${RESET} $*" >&2; }
 die()  { printf '%s\n' "${RED}[error]${RESET} $*" >&2; exit 1; }
 trap 'die "failed at line $LINENO: $BASH_COMMAND"' ERR
 
-need_root() { [[ $EUID -eq 0 || -n "${PULSE_LT_ALLOW_NONROOT:-}" ]] || die "Run as root: sudo pulse-lt $*"; }
+need_root() { [[ $EUID -eq 0 || -n "${PULSE_BENCH_ALLOW_NONROOT:-}" ]] || die "Run as root: sudo pulse-bench $*"; }
 need_jq()   { command -v jq >/dev/null || die "jq is required (sudo apt install jq / sudo dnf install jq)"; }
 
 # artisan in the API release, as the application user
@@ -88,14 +92,14 @@ cmd_status() {
       warn "this CRM release has no loadtest:status (needs a CRM commit with LOADTEST_MODE)"
     fi
   fi
-  [[ -f "$LT_ENV_BACKUP" ]] && warn "throttles are OFF (the original settings are saved; 'pulse-lt throttles on' restores them)"
+  [[ -f "$LT_ENV_BACKUP" ]] && warn "throttles are OFF (the original settings are saved; 'pulse-bench throttles on' restores them)"
   return 0
 }
 
 # ── seed ──────────────────────────────────────────────────────────────────────
 cmd_seed() {
   need_root seed; need_jq
-  local store="${1:-}"; [[ -n "$store" && "$store" != --* ]] || die "usage: pulse-lt seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--yes]"
+  local store="${1:-}"; [[ -n "$store" && "$store" != --* ]] || die "usage: pulse-bench seed <store> [--profile small|medium|large] [--seed N] [--as-of DATE] [--reset] [--yes]"
   shift
   local profile=small seed=42 asof="" reset=0 yes=0 force=0
   while [[ $# -gt 0 ]]; do
@@ -161,7 +165,7 @@ cmd_throttles() {
       artisan list --raw 2>/dev/null | grep -q '^loadtest:status' || die "this CRM release has no LOADTEST_MODE (deploy a newer CRM commit)"
       install -d -m 700 "$LT_STATE"
       if [[ -f "$LT_ENV_BACKUP" ]]; then
-        warn "throttles are already off (restore with: pulse-lt throttles on)"
+        warn "throttles are already off (restore with: pulse-bench throttles on)"
       else
         {
           printf 'APP_ENV=%s\n' "$(env_get APP_ENV)"
@@ -177,21 +181,21 @@ cmd_throttles() {
       local eff; eff="$(throttles_effective)"
       [[ "$eff" == "true" ]] || { warn "LOADTEST_MODE did not take effect (loadtest:status says: $eff); restoring"; cmd_throttles on || true; die "could not lift the throttles"; }
       say "Per-IP rate limits are OFF (APP_ENV=staging, LOADTEST_MODE=true)."
-      warn "This server is NOT production-configured until you run: pulse-lt throttles on"
+      warn "This server is NOT production-configured until you run: pulse-bench throttles on"
       note "nginx's own limit on the login URLs (30 per minute per IP) stays on; use a shared login or --accounts-file."
       if command -v systemd-run >/dev/null && [[ -d /run/systemd/system ]]; then
-        if systemd-run --quiet --unit="pulse-lt-restore" --on-active="${mins}m" /usr/local/bin/pulse-lt throttles on >/dev/null 2>&1; then
-          note "Automatic restore in ${mins} minutes (unit pulse-lt-restore)."
+        if systemd-run --quiet --unit="pulse-bench-restore" --on-active="${mins}m" /usr/local/bin/pulse-bench throttles on >/dev/null 2>&1; then
+          note "Automatic restore in ${mins} minutes (unit pulse-bench-restore)."
         else
-          warn "could not schedule the automatic restore: remember to run 'pulse-lt throttles on'"
+          warn "could not schedule the automatic restore: remember to run 'pulse-bench throttles on'"
         fi
       else
-        warn "no systemd timer available: remember to run 'pulse-lt throttles on'"
+        warn "no systemd timer available: remember to run 'pulse-bench throttles on'"
       fi
       ;;
     on)
       if [[ ! -f "$LT_ENV_BACKUP" ]]; then
-        note "Nothing to restore (throttles were not lifted by pulse-lt)."
+        note "Nothing to restore (throttles were not lifted by pulse-bench)."
         [[ "$(env_get LOADTEST_MODE)" != "true" ]] || warn "LOADTEST_MODE=true is set in .env by hand: remove it"
         return 0
       fi
@@ -203,13 +207,13 @@ cmd_throttles() {
       if [[ "$absent" == 1 ]]; then env_unset LOADTEST_MODE; else env_set LOADTEST_MODE "${old_mode:-false}"; fi
       apply_config
       rm -f -- "$LT_ENV_BACKUP"
-      systemctl stop pulse-lt-restore.timer >/dev/null 2>&1 || true
+      systemctl stop pulse-bench-restore.timer >/dev/null 2>&1 || true
       local eff; eff="$(throttles_effective)"
       [[ "$eff" != "true" ]] || die "LOADTEST_MODE is still in effect: check $API_ENV"
       say "Rate limits are back on; APP_ENV=${old_env:-<unset>} restored."
       ;;
     status|"") cmd_status ;;
-    *) die "usage: pulse-lt throttles off [--for MINUTES] | on | status" ;;
+    *) die "usage: pulse-bench throttles off [--for MINUTES] | on | status" ;;
   esac
 }
 
@@ -336,19 +340,19 @@ cmd_record() {
   case "$sub" in
     start)
       local id="${1:-}"; shift || true
-      [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || die "usage: pulse-lt record start <id>   (letters, digits, . _ -)"
+      [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || die "usage: pulse-bench record start <id>   (letters, digits, . _ -)"
       local note=""
       while [[ $# -gt 0 ]]; do case "$1" in --note) note="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
       local dir="$LT_STATE/$id"
       [[ ! -e "$dir" ]] || die "record '$id' already exists ($dir): pick a new id"
-      [[ ! -f "$LT_STATE/active" ]] || die "record '$(cat "$LT_STATE/active")' is still running: pulse-lt record stop"
+      [[ ! -f "$LT_STATE/active" ]] || die "record '$(cat "$LT_STATE/active")' is still running: pulse-bench record stop"
       install -d -m 700 "$dir"
       local slow_state="" slow_file="" datadir=""
       slow_state="$(mysql_q "SELECT @@slow_query_log, @@long_query_time, @@slow_query_log_file" || true)"
       slow_file="$(awk -F'\t' '{print $3}' <<<"$slow_state")"
       datadir="$(mysql_q "SELECT @@datadir" || true)"
       [[ "$slow_file" == /* || -z "$slow_file" ]] || slow_file="${datadir%/}/$slow_file"
-      [[ "$(dataset_json)" != null ]] || warn "no dataset description found (run 'pulse-lt seed' first, or the record will say 'none recorded')"
+      [[ "$(dataset_json)" != null ]] || warn "no dataset description found (run 'pulse-bench seed' first, or the record will say 'none recorded')"
       mysql_status_json >"$dir/mysql.start.json"
       redis_info_json >"$dir/redis.start.json"
       jq -n --arg id "$id" --arg note "$note" --arg at "$(date -u +%FT%TZ)" --argjson epoch "$(date +%s)" \
@@ -369,13 +373,13 @@ cmd_record() {
       echo $! >"$dir/sampler.pid"
       disown -a 2>/dev/null || true
       echo "$id" >"$LT_STATE/active"
-      say "Recording '$id'. Slow queries over ${SLOW_MS} ms are being logged. Start the load now; then: pulse-lt record stop --results summary.json"
-      [[ "$(jq -r '.config.loadtest_mode.effective // false' "$dir/start.json")" == "true" ]] || note "(rate limits are ON for this run; use 'pulse-lt throttles off' first to measure raw capacity)"
+      say "Recording '$id'. Slow queries over ${SLOW_MS} ms are being logged. Start the load now; then: pulse-bench record stop --results summary.json"
+      [[ "$(jq -r '.config.loadtest_mode.effective // false' "$dir/start.json")" == "true" ]] || note "(rate limits are ON for this run; use 'pulse-bench throttles off' first to measure raw capacity)"
       ;;
     stop)
       local results=""
       while [[ $# -gt 0 ]]; do case "$1" in --results) results="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
-      [[ -f "$LT_STATE/active" ]] || die "no record is running (pulse-lt record start <id>)"
+      [[ -f "$LT_STATE/active" ]] || die "no record is running (pulse-bench record start <id>)"
       local id dir
       id="$(cat "$LT_STATE/active")"; dir="$LT_STATE/$id"
       if [[ -n "$results" ]]; then
@@ -458,7 +462,7 @@ cmd_record() {
       local aid="${1:-}"; shift || true
       local afile=""
       while [[ $# -gt 0 ]]; do case "$1" in --results) afile="${2:?}"; shift 2 ;; *) die "unknown option $1" ;; esac; done
-      [[ -n "$aid" && -n "$afile" ]] || die "usage: pulse-lt record attach <id> --results summary.json"
+      [[ -n "$aid" && -n "$afile" ]] || die "usage: pulse-bench record attach <id> --results summary.json"
       local rec="$LT_STATE/$aid/benchmark-$aid.json"
       [[ -f "$rec" ]] || die "no finished record '$aid' ($rec)"
       [[ -s "$afile" ]] || die "--results: $afile is missing or empty"
@@ -470,7 +474,7 @@ cmd_record() {
       say "Load-generator results of '$aid' replaced from $afile"
       cat "$LT_STATE/$aid/benchmark-$aid.md"
       ;;
-    *) die "usage: pulse-lt record start <id> [--note TEXT] | stop [--results summary.json] | attach <id> --results summary.json" ;;
+    *) die "usage: pulse-bench record start <id> [--note TEXT] | stop [--results summary.json] | attach <id> --results summary.json" ;;
   esac
 }
 
@@ -505,7 +509,7 @@ render_md() { # render_md <record.json>
 cmd_diff() {
   need_jq
   local a="${1:-}" b="${2:-}"
-  [[ -r "$a" && -r "$b" ]] || die "usage: pulse-lt diff <a.json> <b.json>"
+  [[ -r "$a" && -r "$b" ]] || die "usage: pulse-bench diff <a.json> <b.json>"
   note "== Differences in the environment and configuration (comparable only when this list is just the change under test) =="
   jq -n --slurpfile a "$a" --slurpfile b "$b" '
     def flat(o): [o | paths(scalars) as $p | {key: ($p | map(tostring) | join(".")), value: getpath($p)}] | from_entries;

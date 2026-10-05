@@ -35,7 +35,7 @@ Usage: sudo bash loadtest/seed/seed.sh --store <slug> [options]
   --months <n>          spread orders over this many months, default 12 (1-60)
   --seed <n>            same number, same data (default 1)
   --no-data             with --create-store: only create the (empty, plan "loadtest") store,
-                        for the CRM's own seeder:  sudo pulse-lt seed <store> --profile medium
+                        for the CRM's own seeder:  sudo pulse-bench seed <store> --profile medium
   --purge               remove everything this tool added, then stop
   --dry-run             show the plan and the disk estimate, change nothing
   --yes                 do not ask for confirmation
@@ -140,7 +140,7 @@ if [[ "$CREATE_STORE" -eq 1 ]]; then
   printf 'store=%s\nemail=%s\npassword=%s\n' "$STORE" "$ADMIN_EMAIL" "$PASS" >"$CRED_FILE"
   log "Admin login saved to $CRED_FILE (mode 600)."
   if [[ "$NO_DATA" -eq 1 ]]; then
-    log "Store '$STORE' is ready and empty. Fill it with:  sudo pulse-lt seed $STORE --profile small|medium|large"
+    log "Store '$STORE' is ready and empty. Fill it with:  sudo pulse-bench seed $STORE --profile small|medium|large"
     exit 0
   fi
 fi

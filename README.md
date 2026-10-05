@@ -449,7 +449,7 @@ Three tools, used together. An empty database always looks fast, so **seed first
 |---|---|---|
 | `loadtest/run.sh` | a **separate** machine (your PC or a second VM) | human-like traffic with [Locust](https://locust.io): people log in once, think (log-normal pauses), click, sometimes leave half-way, and a new person arrives later; cold and warm browser caches; a pass/fail verdict |
 | `loadtest/seed/seed.sh` | the server | realistic products, customers and orders as plain SQL, any CRM version; refuses the live store; `--purge` removes exactly what it added |
-| `pulse-lt` | the server | seeds the CRM's own dataset, lifts the rate limits for a run, records the server's side and compares runs |
+| `pulse-bench` | the server | seeds the CRM's own dataset, lifts the rate limits for a run, records the server's side and compares runs |
 
 ```bash
 # from your PC (Git Bash on Windows), not from the server being tested
@@ -464,16 +464,16 @@ Profiles: `smoke`, `average`, `peak`, `spike`, `soak`, `breakpoint` (adds users 
 
 ```bash
 sudo bash loadtest/seed/seed.sh --store loadtest --create-store --no-data   # an empty store with plan "loadtest"
-sudo pulse-lt seed loadtest --profile small --seed 42                       # small 10k orders, medium 200k, large 1M (+ reviews and behaviour events)
-sudo pulse-lt throttles off --for 120                                       # optional: lift the per-IP rate limits (restores itself)
-sudo pulse-lt record start L-001 --note "what this run is"
+sudo pulse-bench seed loadtest --profile small --seed 42                       # small 10k orders, medium 200k, large 1M (+ reviews and behaviour events)
+sudo pulse-bench throttles off --for 120                                       # optional: lift the per-IP rate limits (restores itself)
+sudo pulse-bench record start L-001 --note "what this run is"
 #   ... run loadtest/run.sh from your PC, then copy loadtest/results/<time>/summary.json to the server (scp file user@server:) ...
-sudo pulse-lt record stop --results ~/summary.json                          # writes benchmark-L-001.json and .md
-sudo pulse-lt throttles on
-sudo pulse-lt diff /var/lib/pulsedeploy/lt/L-001/benchmark-L-001.json /var/lib/pulsedeploy/lt/L-002/benchmark-L-002.json
+sudo pulse-bench record stop --results ~/summary.json                          # writes benchmark-L-001.json and .md
+sudo pulse-bench throttles on
+sudo pulse-bench diff /var/lib/pulsedeploy/bench/L-001/benchmark-L-001.json /var/lib/pulsedeploy/bench/L-002/benchmark-L-002.json
 ```
 
-`pulse-lt throttles off` sets `LOADTEST_MODE=true` and `APP_ENV=staging` (the CRM ignores the switch in production on purpose), rebuilds the config cache and reloads PHP-FPM; `on` restores the original `.env` byte for byte, and a systemd timer does the same after `--for` minutes. `record` snapshots the VM, versions, deployed commits, database/PHP/OPcache/Redis/nginx settings and the dataset; samples CPU, I/O wait, steal, swap, memory, PHP workers, Node memory and database threads during the run; reads nginx request times per log (API, loopback API, admin, storefront); counts database and Redis activity; lists every query slower than 200 ms; and merges the load generator's results. `diff` prints only what differs, so two runs are comparable when that list is just the change under test. Add results from a forgotten run later with `sudo pulse-lt record attach <id> --results summary.json`.
+`pulse-bench throttles off` sets `LOADTEST_MODE=true` and `APP_ENV=staging` (the CRM ignores the switch in production on purpose), rebuilds the config cache and reloads PHP-FPM; `on` restores the original `.env` byte for byte, and a systemd timer does the same after `--for` minutes. `record` snapshots the VM, versions, deployed commits, database/PHP/OPcache/Redis/nginx settings and the dataset; samples CPU, I/O wait, steal, swap, memory, PHP workers, Node memory and database threads during the run; reads nginx request times per log (API, loopback API, admin, storefront); counts database and Redis activity; lists every query slower than 200 ms; and merges the load generator's results. `diff` prints only what differs, so two runs are comparable when that list is just the change under test. Add results from a forgotten run later with `sudo pulse-bench record attach <id> --results summary.json`.
 
 What this does not tell you: it is server-side load, not a browser (JavaScript is not run); think times are a model (set them from your analytics); all traffic comes from one address; and a slow endpoint with no slow query is a PHP problem to profile, not to guess.
 
@@ -503,7 +503,7 @@ L-003 stopped after 515 s at its first step while L-004 ran every step up to 150
 * **`crm.sh`:** smoke failures now fail the install (named, non-zero exit, no success banner) with new checks (real tenant read, scheduler timer, store name on the API and storefront, certificate validity); the first store is created with `store:provision` (password by file, JSON result, `--catalog` / `--demo` / `--vertical`); the CRM definition uses the CRM's database names and trusts only the local nginx for client IPs; the scheduler stays on; a gadget-shop storefront definition (`--storefront gadgets`); the CRM and PulseDeploy commits are recorded in `/etc/pulsedeploy/crm.conf`; `jq` is installed with the base packages.
 * **`pulse deploy api`:** also runs `tenants:migrate` when the app has it, so existing stores receive later migrations; a failure aborts the deploy before the release is live.
 * **Installer fixes found by real runs:** the app user now owns the whole `storage/` tree (parent directories used to stay root-owned, so the app could not write to `storage/app`); nginx access logs carry the request time, including the loopback API that the admin and storefront call (its log used to be off); the Redis version is read from `INFO` (Amazon Linux's `redis6`).
-* **New tools:** `pulse-lt` (seed, rate-limit switch, benchmark records, `diff`, `attach`), `loadtest/seed/seed.sh` (SQL test data with `--no-data`, `--purge`), the human-like load generator (`loadtest/run.sh`) and its scenarios; the admin scenario no longer calls an order-detail URL the CRM does not have.
+* **New tools:** `pulse-bench` (seed, rate-limit switch, benchmark records, `diff`, `attach`), `loadtest/seed/seed.sh` (SQL test data with `--no-data`, `--purge`), the human-like load generator (`loadtest/run.sh`) and its scenarios; the admin scenario no longer calls an order-detail URL the CRM does not have.
 * **README and OS guides:** per-OS install steps for Ubuntu/Debian, Amazon Linux 2023 and Rocky/Alma/CentOS, plus Windows and macOS client notes.
 
 ---
@@ -548,7 +548,7 @@ PulseDeploy/
 ├── crm.sh                    # One command: pull, build, install and configure a CRM + storefront
 ├── apps/                     # CRM and storefront definitions (crm/, storefronts/)
 ├── bin/pulse                 # On-server CLI: deploy, rollback, status, logs, backup (laravel-next)
-├── bin/pulse-lt              # On-server load-test helper: seed, rate-limit switch, benchmark records, diff
+├── bin/pulse-bench              # On-server load-test helper: seed, rate-limit switch, benchmark records, diff
 ├── examples/github-actions/  # CI workflows that build and deploy the apps
 ├── loadtest/                 # Human-like load testing (run.sh, scenarios) and seed/ (realistic test data)
 ├── tests/run.sh              # Unit tests for helpers + CLI validation

@@ -25,7 +25,7 @@ jobs:
       - name: Lint library, module and test scripts
         run: |
           find scripts/ tests/ -name "*.sh" | xargs shellcheck -x
-          shellcheck -x bin/pulse bin/pulse-lt
+          shellcheck -x bin/pulse bin/pulse-bench
 
   loadtest:
     name: Load-test module
@@ -107,7 +107,7 @@ jobs:
             "scripts/lib/profile_tuning.sh"
             "scripts/stacks/laravel_next.sh"
             "bin/pulse"
-            "bin/pulse-lt"
+            "bin/pulse-bench"
             "crm.sh"
             "scripts/lib/crm.sh"
             "apps/crm/aventech.conf"
