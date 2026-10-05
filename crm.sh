@@ -395,8 +395,8 @@ clone_crm_once() {
   section "Pulling the CRM"
   crm_clone "$CD_REPO" "$CD_REF" "$CRM_WORK/src/crm"
   CRM_CLONED=1
-  CRM_COMMIT="$(git -C "$CRM_WORK/src/crm" rev-parse HEAD 2>/dev/null || true)"
-  PULSEDEPLOY_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  CRM_COMMIT="$(git -c safe.directory='*' -C "$CRM_WORK/src/crm" rev-parse HEAD 2>/dev/null || true)"
+  PULSEDEPLOY_COMMIT="$(git -c safe.directory='*' -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
   crm_state_put CRM_COMMIT "$CRM_COMMIT"   # on update the file already exists; install writes it in save_state
   crm_state_put PULSEDEPLOY_COMMIT "$PULSEDEPLOY_COMMIT"
 }
