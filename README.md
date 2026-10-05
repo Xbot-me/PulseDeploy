@@ -1,6 +1,6 @@
-# ⚡ PulseDeploy
+# PulseDeploy
 
-> **One-command VPS & AWS server setup automation** — LEMP · LAMP · Node.js · Docker · Redis · SSL · Firewall
+> **Set up and operate a Linux server with one command**: LEMP, LAMP, Node.js, Docker, Redis, SSL, firewall, backups and load testing
 
 [![CI](https://github.com/Xbot-me/PulseDeploy/actions/workflows/ci.yml/badge.svg)](https://github.com/Xbot-me/PulseDeploy/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f97316?style=flat-square)](LICENSE)
@@ -26,37 +26,38 @@
 
 ---
 
-## 🧠 About
+## About
 
 **PulseDeploy** is a modular Bash toolkit for turning a fresh Linux server into a production-ready one: web stack, database, cache, firewall, TLS, backups and a deploy command. It works on a VPS (Hetzner, DigitalOcean, Linode, Vultr) or **AWS EC2**.
 
-No Ansible. No Terraform. No YAML. Plain Bash you can read, with an interactive wizard that detects the OS, sizes everything to the machine's RAM and asks only what it needs.
+There is no Ansible, Terraform or YAML to learn. It is plain Bash you can read, with an interactive wizard that detects the OS, sizes everything to the machine's RAM and asks only what it needs.
 
-Built after recovering from 502 storms, a bloated database, Redis misconfiguration and a payment-skimmer incident on a WooCommerce store with 130k+ customers.
+It grew out of running a WooCommerce store with 130k+ customers through 502 storms, a bloated database, a Redis misconfiguration and a payment-skimmer incident.
 
-**On this page:** [What you get](#-what-you-get) · [Supported systems](#-supported-operating-systems) · [Before you start](#-before-you-start-every-os) · [Install on Ubuntu / Debian](#-install-on-ubuntu--debian) · [Install on Amazon Linux 2023](#-install-on-amazon-linux-2023-aws-ec2-or-a-vm) · [Install on Rocky / Alma / CentOS](#-install-on-rocky--alma--centos--rhel) · [Working from Windows or macOS](#-working-from-windows-or-macos) · [Stacks](#-the-stacks) · [Options](#-every-option) · [After installing](#-after-installing) · [Operating the server](#-operating-the-server) · [Laravel + Next.js](#-laravel--nextjs-in-detail) · [CRM in one command](#-one-command-the-crm) · [Testing on a VM](#-testing-on-a-vm) · [Auditing and tuning](#-auditing-and-tuning) · [Load testing and benchmarks](#-load-testing-and-benchmarks) · [Recent changes](#-recent-changes) · [Undo](#-undoing-an-install) · [Troubleshooting](#-troubleshooting)
+**On this page:** [What you get](#what-you-get) · [Supported systems](#supported-operating-systems) · [Before you start](#before-you-start-every-os) · [Install on Ubuntu / Debian](#install-on-ubuntu--debian) · [Install on Amazon Linux 2023](#install-on-amazon-linux-2023-aws-ec2-or-a-vm) · [Install on Rocky / Alma / CentOS](#install-on-rocky--alma--centos--rhel) · [Working from Windows or macOS](#working-from-windows-or-macos) · [Stacks](#the-stacks) · [Options](#every-option) · [After installing](#after-installing) · [Operating the server](#operating-the-server) · [Laravel + Next.js](#laravel--nextjs-in-detail) · [CRM in one command](#one-command-the-crm) · [Testing on a VM](#testing-on-a-vm) · [Auditing and tuning](#auditing-and-tuning) · [Load testing](#load-testing-your-own-software) · [Benchmarking a server](#benchmarking-a-server) · [Recent changes](#recent-changes) · [Undo](#undoing-an-install) · [Troubleshooting](#troubleshooting)
 
 ---
 
-## ✨ What you get
+## What you get
 
 | Category       | What's included |
 |----------------|----------------|
-| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL/MariaDB), LAMP (Apache + PHP + MySQL/MariaDB), Node.js + PM2 + Nginx reverse proxy, **Laravel + Next.js** (API + admin + storefront on one small server, see [Laravel + Next.js in detail](#-laravel--nextjs-in-detail)) |
-| **One-command CRM** | `crm.sh` pulls, builds and configures the AvenTech CRM (Laravel API + Next.js admin, multi-tenant) with a chosen storefront ([details](#-one-command-the-crm)) |
-| **PHP**        | Version selector (8.1 – 8.4; a third-party repo is added only if your distro lacks the version), OPcache JIT, PHP-FPM pool sized from RAM |
+| **Stacks**     | LEMP (Nginx + PHP-FPM + MySQL/MariaDB), LAMP (Apache + PHP + MySQL/MariaDB), Node.js + PM2 + Nginx reverse proxy, **Laravel + Next.js** (API + admin + storefront on one small server, see [Laravel + Next.js in detail](#laravel--nextjs-in-detail)) |
+| **One-command CRM** | `crm.sh` pulls, builds and configures the AvenTech CRM (Laravel API + Next.js admin, multi-tenant) with a chosen storefront ([details](#one-command-the-crm)) |
+| **PHP**        | Version selector (8.1 to 8.4; a third-party repo is added only if your distro lacks the version), OPcache JIT, PHP-FPM pool sized from RAM |
 | **Security**   | UFW or firewalld, fail2ban (SSH + Nginx + Apache), blocked access to `.env`/`.git`/`.sql`/backups, security headers, MariaDB/MySQL bound to localhost |
 | **SSL**        | Certbot (Let's Encrypt) with auto-renewal |
 | **Caching**    | Redis over a Unix socket or TCP, `maxmemory` calculated from RAM, `allkeys-lru` |
 | **Containers** | Docker Engine + Compose v2, log rotation, weekly prune (never touches volumes) |
 | **Swap**       | Auto-sized swap file, `swappiness=10` |
-| **Operations** | `pulse` CLI (deploy, rollback, status, logs, backup, restore), nightly backups, `audit` and `retune` commands, load-test and test-data tooling |
+| **Operations** | `pulse` CLI (deploy, rollback, status, logs, backup, restore), nightly backups, `audit` and `retune` commands |
+| **Load testing** | `pulse-lt`: describe any website or API, then test it with human-like traffic and get a plain-English verdict ([guide](#load-testing-your-own-software)) |
 | **Reliability**| Idempotent (safe to re-run), every step verified with a real check (not only an exit code), strict flag validation, config changes validated and rolled back on failure |
 | **Logging**    | Full install log in `/var/log/server-bootstrap.log` (and `/var/log/pulsedeploy-crm.log` for `crm.sh`) |
 
 ---
 
-## 🐧 Supported Operating Systems
+## Supported Operating Systems
 
 | Distro | Package manager | Tested on a real machine? | Notes |
 |---|---|---|---|
@@ -70,7 +71,7 @@ Built after recovering from 502 storms, a bloated database, Redis misconfigurati
 
 ---
 
-## 🧭 Before you start (every OS)
+## Before you start (every OS)
 
 You need:
 
@@ -92,7 +93,7 @@ You need:
 
 ---
 
-## 🟠 Install on Ubuntu / Debian
+## Install on Ubuntu / Debian
 
 Works on Ubuntu 20.04 / 22.04 / 24.04 and Debian 11 / 12. Commands run on the server, as a user with `sudo`.
 
@@ -157,7 +158,7 @@ On **Debian** the commands are identical. On a minimal image run `sudo apt insta
 
 ---
 
-## 🟡 Install on Amazon Linux 2023 (AWS EC2 or a VM)
+## Install on Amazon Linux 2023 (AWS EC2 or a VM)
 
 This is the best-tested path for the Laravel + Next.js / CRM stack. Amazon Linux 2023 differs from Ubuntu in a few ways, and PulseDeploy handles them:
 
@@ -178,7 +179,7 @@ aws ec2 authorize-security-group-ingress --group-id sg-xxxxxxxx --protocol tcp -
 aws ec2 authorize-security-group-ingress --group-id sg-xxxxxxxx --protocol tcp --port 443 --cidr 0.0.0.0/0
 ```
 
-Not on AWS? A VMware/VirtualBox/Proxmox VM running Amazon Linux 2023 works the same way: see [Testing on a VM](#-testing-on-a-vm) (host names without real DNS, snapshots, what to check).
+Not on AWS? A VMware/VirtualBox/Proxmox VM running Amazon Linux 2023 works the same way: see [Testing on a VM](#testing-on-a-vm) (host names without real DNS, snapshots, what to check).
 
 **2. Connect and get the code.** The default user is `ec2-user`:
 
@@ -225,7 +226,7 @@ sudo cat /root/pulsedeploy-crm-credentials.txt         # admin login
 
 ---
 
-## 🔴 Install on Rocky / Alma / CentOS / RHEL
+## Install on Rocky / Alma / CentOS / RHEL
 
 Rocky Linux 8 and 9, AlmaLinux 8 and 9, CentOS Stream and RHEL 8/9. These paths follow the same design as the others but have **not yet been run on real machines**: review the dry run and report anything that fails.
 
@@ -249,9 +250,9 @@ To confirm SELinux is the cause of a 502, run `sudo setenforce 0` temporarily; i
 
 ---
 
-## 💻 Working from Windows or macOS
+## Working from Windows or macOS
 
-PulseDeploy itself runs **on the Linux server**. Your Windows or macOS computer is the place you connect from, and where you run the load tests.
+PulseDeploy's installer runs **on the Linux server**. Your Windows or macOS computer is the place you connect from, and where you run `pulse-lt` load tests.
 
 | Task | Windows | macOS |
 |---|---|---|
@@ -260,27 +261,27 @@ PulseDeploy itself runs **on the Linux server**. Your Windows or macOS computer 
 | Reach a test VM without DNS | edit `C:\Windows\System32\drivers\etc\hosts` as Administrator | `sudo nano /etc/hosts` |
 | Hosts entry to add | `192.168.1.50  api.crm.test admin.crm.test shop.crm.test` | same |
 
-The load-test module (`loadtest/run.sh`) is designed to run from your PC, not from the server, and works in Git Bash on Windows. Full steps: [Load testing and benchmarks](#-load-testing-and-benchmarks).
+`pulse-lt` is designed to run from your PC, not from the server, and works in Git Bash on Windows. See [Load testing your own software](#load-testing-your-own-software).
 
 Do not try to run `bootstrap.sh` on Windows or macOS: it installs system packages and manages services, and refuses to run on anything but a supported Linux.
 
 ---
 
-## 🧱 The stacks
+## The stacks
 
 | `--stack` | Installs | Typical use |
 |---|---|---|
 | `lemp` | Nginx, PHP-FPM, MariaDB/MySQL | PHP sites, WordPress, Laravel on a classic server |
 | `lamp` | Apache, PHP, MariaDB/MySQL | Apache-only PHP apps |
 | `node` | Node.js, PM2, Nginx reverse proxy | any Node app on `--app-port` |
-| `laravel-next` | Nginx, PHP-FPM, MariaDB/MySQL, Redis, Node, systemd services for the API, queue worker, scheduler and two Next.js apps, backups, `pulse` CLI | Laravel API + Next.js admin + storefront on one 2-8 GB server ([details](#-laravel--nextjs-in-detail), [CRM in one command](#-one-command-the-crm)) |
+| `laravel-next` | Nginx, PHP-FPM, MariaDB/MySQL, Redis, Node, systemd services for the API, queue worker, scheduler and two Next.js apps, backups, `pulse` CLI | Laravel API + Next.js admin + storefront on one 2-8 GB server ([details](#laravel--nextjs-in-detail), [CRM in one command](#one-command-the-crm)) |
 | `none` | core only (updates, selected services) | you bring your own application layer |
 
-`crm.sh install` is `laravel-next` plus pulling the CRM and storefront code, building them, creating the first store and running smoke tests ([details](#-one-command-the-crm)). `bash crm.sh storefronts` lists the storefronts you can choose.
+`crm.sh install` is `laravel-next` plus pulling the CRM and storefront code, building them, creating the first store and running smoke tests ([details](#one-command-the-crm)). `bash crm.sh storefronts` lists the storefronts you can choose.
 
 ---
 
-## 🎛️ Every option
+## Every option
 
 Everything the wizard asks can be given as a flag or a `PULSE_*` environment variable. Flags may be written `--flag value` or `--flag=value`; unknown flags and invalid values are rejected before anything changes. `bash bootstrap.sh --help` prints this list.
 
@@ -306,7 +307,7 @@ For `crm.sh install` (and `update`, `audit`, `retune`) run `bash crm.sh help`.
 
 ---
 
-## 📋 After installing
+## After installing
 
 - [ ] DNS: point the A records for your domain (and `api.`, `admin.` for the Laravel stack) at the server's IP
 - [ ] TLS: pass `--domain` + `--email` with the `certbot` service, or run `sudo certbot --nginx -d yourdomain.com`
@@ -320,7 +321,7 @@ For `crm.sh install` (and `update`, `audit`, `retune`) run `bash crm.sh help`.
 
 ---
 
-## 🔧 Operating the server
+## Operating the server
 
 The `pulse` command is installed with the `laravel-next` stack and the CRM installer:
 
@@ -338,7 +339,7 @@ CI examples that build and deploy automatically are in `examples/github-actions/
 
 ---
 
-## 🧪 Laravel + Next.js in detail
+## Laravel + Next.js in detail
 
 `--stack laravel-next` sets up one VPS for a Laravel API, a Next.js admin dashboard and a Next.js storefront, tuned for a low monthly bill: about 4 GB of RAM is comfortable, 2 GB works with swap.
 
@@ -379,7 +380,7 @@ Operating notes: backups live in `/var/backups/pulsedeploy` (root only, 7 days);
 
 ---
 
-## 🚀 One command: the CRM
+## One command: the CRM
 
 `crm.sh` provisions the server, pulls the AvenTech CRM (Laravel 11 API + Next.js admin, multi-tenant) and the storefront you choose from Git, builds and deploys them, creates the first store and checks that everything answers.
 
@@ -424,13 +425,13 @@ sudo pulse-crm update --only backend,admin     # or: storefront --storefront-ref
 
 ---
 
-## 🖥️ Testing on a VM
+## Testing on a VM
 
 Use a machine you can throw away and take a snapshot after the OS is updated. Amazon Linux **2023** needs 4 GB RAM (2 GB works with swap), 2 vCPU, 15 GB+ disk and internet access. Without real DNS, add the three host names to the hosts file of the machine whose browser or load generator you use (`C:\Windows\System32\drivers\etc\hosts` as Administrator on Windows, `/etc/hosts` elsewhere): `192.168.1.50  api.crm.test admin.crm.test shop.crm.test`, then pass `--api-host api.crm.test --admin-host admin.crm.test --shop-host shop.crm.test`. Leave out `--certbot` and `--cloudflare`. `scripts/vm-check.sh` is a read-only readiness check. After the install try `pulse status`, `sudo pulse backup`, `pulse rollback admin`, and re-run the same `crm.sh install ...` (it must succeed without changing the store).
 
 ---
 
-## 📈 Auditing and tuning
+## Auditing and tuning
 
 ```bash
 sudo pulse-crm audit                  # or: sudo bash scripts/audit.sh [--load] [--no-perf]
@@ -441,24 +442,94 @@ The audit is **read-only**; each line is `PASS`, `WARN`, `FAIL`, `INFO` or `SKIP
 
 ---
 
-## 🔬 Load testing and benchmarks
+## Load testing your own software
 
-Three tools, used together. An empty database always looks fast, so **seed first**.
+`pulse-lt` works on **any** website or API you own, not only things PulseDeploy installed. It sends the traffic of people rather than a flood of identical requests: they sign in once, look at a page, pause to read, click, sometimes leave half-way, and a different person arrives later. It answers "how many people can this handle before it hurts, and what breaks first?".
 
-| Tool | Runs on | What it does |
-|---|---|---|
-| `loadtest/run.sh` | a **separate** machine (your PC or a second VM) | human-like traffic with [Locust](https://locust.io): people log in once, think (log-normal pauses), click, sometimes leave half-way, and a new person arrives later; cold and warm browser caches; a pass/fail verdict |
-| `loadtest/seed/seed.sh` | the server | realistic products, customers and orders as plain SQL, any CRM version; refuses the live store; `--purge` removes exactly what it added |
-| `pulse-bench` | the server | seeds the CRM's own dataset, lifts the rate limits for a run, records the server's side and compares runs |
+It needs Python 3.9 or newer on **your computer** (it installs Locust into `loadtest/.venv` the first time). Run it from your laptop or a second machine, never from the server under test, and only against systems you own or have written permission to test.
 
 ```bash
-# from your PC (Git Bash on Windows), not from the server being tested
-bash loadtest/run.sh --ip <server-ip> --domain crm.test --store loadtest \
-     --email owner@crm.test --password-file ~/lt-password \
-     --profile average --users 20 --hold 600
+git clone https://github.com/Xbot-me/PulseDeploy.git && cd PulseDeploy
+
+bash bin/pulse-lt init                                # 1. describe your site; writes my-site.json
+bash bin/pulse-lt check my-site.json                  # 2. show the plan, send nothing
+bash bin/pulse-lt run my-site.json --profile smoke    # 3. a one-minute trial with 5 people
+bash bin/pulse-lt run my-site.json --users 50         # 4. the real run
+bash bin/pulse-lt report                              # show the last verdict again
 ```
 
-Profiles: `smoke`, `average`, `peak`, `spike`, `soak`, `breakpoint` (adds users in steps until a limit breaks). The run **fails** when more than `--max-fail` (1%) of requests fail or any endpoint's p95 exceeds `--p95-ms` (1500 ms). `--time-scale 0.25` makes everyone click four times faster. Scenarios are JSON files in `loadtest/scenarios/` (`aventech-admin`, `aventech-storefront`); `bash loadtest/run.sh --check ...` validates one without sending traffic. Safety: it asks you to type the target's name, writes no data unless `--writes`, caps users at 200 without `--allow-large`, tags every request `X-Load-Test`, and reads the password from a file. Logins are throttled by the CRM (5 a minute per account), so people on one account share one login unless you pass `--accounts-file` (one `email:password` per line). Only test servers you own.
+### 1. Describe your site
+
+A **scenario** is a small JSON file of what people do. `pulse-lt init` writes it so you do not have to. Pick whichever input suits you:
+
+| Command | You give it | Good for |
+|---|---|---|
+| `pulse-lt init` | answers to a few questions: address, website or API, how people sign in, the pages they use | a first test |
+| `pulse-lt init --from-urls urls.txt --url https://staging.example.com` | a text file with one path or URL per line (a blank line starts a new visit, `weight=3` makes a visit three times as common) | a list you already know |
+| `pulse-lt init --from-har visit.har` | a browser recording (DevTools, Network tab, click through the site, **Save all as HAR with content**) | the most realistic: your real clicks and pauses |
+
+A `urls.txt` looks like this:
+
+```text
+# journey: browse the shop
+/
+/products?page=2
+/products/42
+
+# journey: search
+/search?q=shirt weight=3
+```
+
+For a login form add `--login /api/login --user-field email --pass-field password --token-path data.token` (leave `--token-path` out when the server sets a session cookie). Recordings are cleaned before use: scripts, images, fonts, failed requests and other sites are dropped, the pauses you took become think times, and **credentials are never copied** (passwords become a `{password}` placeholder, `Authorization` and `Cookie` headers are ignored). `init` prints a note for anything you must supply at run time.
+
+### 2. Run it
+
+```bash
+bash bin/pulse-lt run my-site.json --url https://staging.example.com --users 50 --hold 600 \
+     --username tester --password-file ~/lt-password
+```
+
+The scenario remembers the address it was made for, so `--url` is optional. The tool prints the plan and asks you to type the target's name before sending anything (`--yes` skips this for CI).
+
+| Option | Meaning |
+|---|---|
+| `--users N` | the normal number of people on the site at once (default 20) |
+| `--profile NAME` | `smoke` (5 people, 1 minute), `average` (ramp up, hold), `peak` (3x), `spike` (sudden 4x), `soak` (hours), `breakpoint` (add people until a limit breaks) |
+| `--hold SECONDS` | how long to hold the load (default 600) |
+| `--username`, `--password-file` | sign-in for scenarios that log in; the password is never taken from the command line |
+| `--token-file FILE` | send `Authorization: Bearer <token>` with every request |
+| `--header "Name: value"` | send a header with every request (repeatable) |
+| `--max-fail 0.01` | fail when more than this share of requests fail (default 1%) |
+| `--p95-ms 1500` | fail when any endpoint's 95th-percentile time is slower (default 1500 ms) |
+| `--writes` | also run steps that create or change data (test systems only; skipped by default) |
+| `--time-scale 0.1` | everyone clicks ten times faster |
+
+### 3. Read the verdict
+
+```
+RESULT: FAIL - slowest endpoint p95 2310 ms (limit 1500 ms)
+What this means: with up to 50 people at once it went past your limits.
+Slowest: GET /search (p95 2310 ms); GET /products (p95 1190 ms)
+Failing: POST /api/cart (4 of 160)
+```
+
+The exit status is 0 for PASS and 1 for FAIL, so the same command works as a CI gate. Results (`report.html`, CSV files, `summary.json`) are written to `loadtest/results/<time>/`.
+
+### Safety defaults
+
+- You must type the target's name before any traffic is sent.
+- Nothing that writes data runs unless you pass `--writes`.
+- More than 200 people at the peak needs `--allow-large`.
+- Every request carries an `X-Load-Test: <run id>` header so you can find or filter the traffic in your logs.
+- Test the origin server directly, not through a CDN that may block the traffic. A single source address means per-IP limits see one visitor.
+
+Not covered here: browser rendering time (use Lighthouse), network-level floods, and anything on a system you do not own. A virtual person pauses for a log-normal think time, runs a few weighted journeys per visit, may leave half-way, fetches scripts and styles only on a cold browser cache, and a new person arrives after a gap. Example scenarios for the AvenTech CRM are in `loadtest/scenarios/`; `bash loadtest/run.sh --check ...` validates a scenario without sending traffic.
+
+---
+
+## Benchmarking a server
+
+The traffic comes from `loadtest/run.sh` or `pulse-lt` (see "Load testing your own software" above), run from a **separate** machine. Two tools run **on the server being tested**: `loadtest/seed/seed.sh` (realistic test data as plain SQL, any CRM version, refuses the live store, `--purge` removes exactly what it added) and `pulse-bench`, which seeds the CRM's own dataset, lifts the rate limits for a run, records the server's side and compares runs. An empty database always looks fast, so **seed first**. The CRM limits logins to 5 a minute per account, so people on one account share one login unless you pass `--accounts-file` to `loadtest/run.sh`. Only test servers you own.
 
 **One benchmark, step by step** (on the server, against a disposable store, never a client's):
 
@@ -467,7 +538,7 @@ sudo bash loadtest/seed/seed.sh --store loadtest --create-store --no-data   # an
 sudo pulse-bench seed loadtest --profile small --seed 42                       # small 10k orders, medium 200k, large 1M (+ reviews and behaviour events)
 sudo pulse-bench throttles off --for 120                                       # optional: lift the per-IP rate limits (restores itself)
 sudo pulse-bench record start L-001 --note "what this run is"
-#   ... run loadtest/run.sh from your PC, then copy loadtest/results/<time>/summary.json to the server (scp file user@server:) ...
+#   ... run loadtest/run.sh (or pulse-lt run) from your PC, then copy loadtest/results/<time>/summary.json to the server (scp file user@server:) ...
 sudo pulse-bench record stop --results ~/summary.json                          # writes benchmark-L-001.json and .md
 sudo pulse-bench throttles on
 sudo pulse-bench diff /var/lib/pulsedeploy/bench/L-001/benchmark-L-001.json /var/lib/pulsedeploy/bench/L-002/benchmark-L-002.json
@@ -498,7 +569,7 @@ L-003 stopped after 515 s at its first step while L-004 ran every step up to 150
 
 ---
 
-## 🔧 Recent changes
+## Recent changes
 
 * **`crm.sh`:** smoke failures now fail the install (named, non-zero exit, no success banner) with new checks (real tenant read, scheduler timer, store name on the API and storefront, certificate validity); the first store is created with `store:provision` (password by file, JSON result, `--catalog` / `--demo` / `--vertical`); the CRM definition uses the CRM's database names and trusts only the local nginx for client IPs; the scheduler stays on; a gadget-shop storefront definition (`--storefront gadgets`); the CRM and PulseDeploy commits are recorded in `/etc/pulsedeploy/crm.conf`; `jq` is installed with the base packages.
 * **`pulse deploy api`:** also runs `tenants:migrate` when the app has it, so existing stores receive later migrations; a failure aborts the deploy before the release is live.
@@ -508,7 +579,7 @@ L-003 stopped after 515 s at its first step while L-004 ran every step up to 150
 
 ---
 
-## ↩️ Undoing an install
+## Undoing an install
 
 ```bash
 sudo bash revert.sh --list        # show what PulseDeploy installed
@@ -520,7 +591,7 @@ Databases and Docker data are kept unless you add `--purge-data`. On a throw-awa
 
 ---
 
-## 🩺 Troubleshooting
+## Troubleshooting
 
 Every failure prints the function, file:line and command that stopped. The installer is safe to re-run after a fix. Logs: `/var/log/server-bootstrap.log`, `/var/log/pulsedeploy-crm.log`.
 
@@ -535,11 +606,11 @@ Every failure prints the function, file:line and command that stopped. The insta
 | `git clone` fails with a network error | retry (the installer retries and uses HTTP/1.1); for a private repo pass `--git-token-file` |
 | Port 80 in use | stop the other web server (`sudo systemctl disable --now apache2` etc.) and re-run |
 
-Need help? Send the last 40 terminal lines, both log files, `bash scripts/vm-check.sh` and `cat /etc/os-release`. More: [Testing on a VM](#-testing-on-a-vm).
+Need help? Send the last 40 terminal lines, both log files, `bash scripts/vm-check.sh` and `cat /etc/os-release`. More: [Testing on a VM](#testing-on-a-vm).
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 PulseDeploy/
@@ -548,9 +619,10 @@ PulseDeploy/
 ├── crm.sh                    # One command: pull, build, install and configure a CRM + storefront
 ├── apps/                     # CRM and storefront definitions (crm/, storefronts/)
 ├── bin/pulse                 # On-server CLI: deploy, rollback, status, logs, backup (laravel-next)
-├── bin/pulse-bench              # On-server load-test helper: seed, rate-limit switch, benchmark records, diff
+├── bin/pulse-bench           # On-server benchmark helper: seed, rate-limit switch, benchmark records, diff
+├── bin/pulse-lt              # Load-test CLI for any site: init, check, run, report
 ├── examples/github-actions/  # CI workflows that build and deploy the apps
-├── loadtest/                 # Human-like load testing (run.sh, scenarios) and seed/ (realistic test data)
+├── loadtest/                 # Load-test engine (run.sh, builder.py, init.py), example scenarios, seed/ (CRM test data)
 ├── tests/run.sh              # Unit tests for helpers + CLI validation
 ├── scripts/
 │   ├── audit.sh retune.sh vm-check.sh   # measure, fine-tune and pre-check a server
@@ -566,7 +638,7 @@ Every module is sourceable on its own (one file per concern, OS differences behi
 
 ---
 
-## 🔒 Security Defaults
+## Security Defaults
 
 - `server_tokens off`: Nginx/Apache version hidden
 - Blocked access to `.env`, `.git`, `.sql`, `.log`, `.bak`, `.sh` files
@@ -579,27 +651,28 @@ Every module is sourceable on its own (one file per concern, OS differences behi
 
 ---
 
-## 🛡️ Reliability Notes
+## Reliability Notes
 
-- **Verified, not assumed.** LEMP/LAMP run an end-to-end HTTP → PHP check with a throw-away file (no `phpinfo()` is left behind); Redis, Docker, MySQL and swap are each confirmed working before being reported as done.
-- **Fails loudly.** Any failure prints the function, file:line and command, then exits non-zero.
-- **Non-interactive by design.** Flags and env vars cover every wizard choice; with no terminal (cloud-init) it switches to non-interactive automatically.
-- **Tests.** `bash tests/run.sh` (about 210 checks, no root, no network).
+- **Verified, not assumed:** LEMP/LAMP run an end-to-end HTTP to PHP check with a throw-away file (no `phpinfo()` is left behind); Redis, Docker, MySQL and swap are each confirmed working before being reported as done.
+- **Fails loudly:** Any failure prints the function, file:line and command, then exits non-zero.
+- **Non-interactive by design:** Flags and env vars cover every wizard choice; with no terminal (cloud-init) it switches to non-interactive automatically.
+- **Tests.** `bash tests/run.sh` (about 225 checks, no root, no network); `python3 -m unittest discover -s loadtest/tests` covers the load-test tooling.
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 - [ ] WordPress fast-deploy module (on top of LEMP)
-- [ ] `healthcheck.sh` — audit an existing server's config and services
+- [ ] OpenAPI import for `pulse-lt init`
+- [ ] Ready-made scenarios for WordPress and Laravel
 - [ ] PostgreSQL stack option
 - [ ] Slack / email notification on install complete
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-PRs welcome. If you add support for a new distro or service, follow the existing module pattern — one file per concern, source-able standalone, OS functions via the `os_*` abstraction layer.
+PRs welcome. If you add support for a new distro or service, follow the existing module pattern: one file per concern, source-able standalone, OS functions via the `os_*` abstraction layer.
 
 ```bash
 git checkout -b feat/your-feature
@@ -610,10 +683,10 @@ git push origin feat/your-feature
 
 ---
 
-## 📜 License
+## License
 
-MIT — free to use, fork, and adapt for your own infrastructure.
+MIT. Free to use, fork and adapt for your own infrastructure.
 
 ---
 
-> Built by [@Xbot-me](https://github.com/Xbot-me) · `build it · break it · fix it · automate it`
+Maintained by [@Xbot-me](https://github.com/Xbot-me).
