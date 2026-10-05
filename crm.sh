@@ -27,7 +27,7 @@ SF_BUILD_ENV_CLI=(); SF_RUNTIME_ENV_CLI=()
 DOMAIN=""; EMAIL=""; API_HOST=""; ADMIN_HOST=""; SHOP_HOST=""; SCHEME=""
 CLOUDFLARE=0; CERTBOT=0; APP_USER="deploy"; APP_NAME=""
 STORE=""; STORE_NAME=""; ADMIN_EMAIL=""; ADMIN_PASSWORD=""
-CATALOG="starter"; DEMO=""; VERTICAL=""
+CATALOG="starter"; DEMO=""; VERTICAL=""; CRM_COMMIT=""; PULSEDEPLOY_COMMIT=""
 GIT_TOKEN_FILE=""; GIT_SSH_KEY=""; REGISTRY_DIR=""
 SKIP_SERVER=0; CHECK_ONLY=0; DRY_RUN=0; ASSUME_YES=0; RESET_ENV=0; ONLY=""
 BOOTSTRAP_ARGS=()
@@ -395,6 +395,10 @@ clone_crm_once() {
   section "Pulling the CRM"
   crm_clone "$CD_REPO" "$CD_REF" "$CRM_WORK/src/crm"
   CRM_CLONED=1
+  CRM_COMMIT="$(git -C "$CRM_WORK/src/crm" rev-parse HEAD 2>/dev/null || true)"
+  PULSEDEPLOY_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+  crm_state_put CRM_COMMIT "$CRM_COMMIT"   # on update the file already exists; install writes it in save_state
+  crm_state_put PULSEDEPLOY_COMMIT "$PULSEDEPLOY_COMMIT"
 }
 
 step_backend() {
@@ -583,6 +587,7 @@ save_state() {
     printf 'CRM_ID=%s\nCRM_REPO=%s\nCRM_REF=%s\nSTORE=%s\nSTORE_NAME=%s\nDOMAIN=%s\nSCHEME=%s\n' \
       "$CRM_ID" "$CD_REPO" "$CD_REF" "$STORE" "$STORE_NAME" "$DOMAIN" "$SCHEME"
     printf 'API_HOST=%s\nADMIN_HOST=%s\nSHOP_HOST=%s\nAPP_USER=%s\n' "$API_HOST" "$ADMIN_HOST" "$SHOP_HOST" "$APP_USER"
+    printf 'CRM_COMMIT=%s\nPULSEDEPLOY_COMMIT=%s\n' "$CRM_COMMIT" "$PULSEDEPLOY_COMMIT"
     printf 'STOREFRONT=%s\nSTOREFRONT_REPO=%s\nSTOREFRONT_REF=%s\nSTOREFRONT_DIR=%s\nSTOREFRONT_BUILD_CMD=%s\n' \
       "$STOREFRONT" "$SF_REPO" "$SF_REF" "$SF_DIR" "$SF_BUILD_CMD"
     local e

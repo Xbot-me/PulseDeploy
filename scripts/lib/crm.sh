@@ -135,6 +135,13 @@ crm_clone() { # crm_clone <url> <ref> <dest>
     error "Could not download $1 @ $2 after 3 attempts. Check the network, then re-run (nothing else was changed)."
 }
 
+# crm_state_put <KEY> <value>: set one line of the remembered configuration
+crm_state_put() {
+  local f=/etc/pulsedeploy/crm.conf
+  [[ -f "$f" && -n "$2" ]] || return 0
+  if grep -q "^$1=" "$f"; then sed -i "s|^$1=.*|$1=$2|" "$f"; else printf '%s=%s\n' "$1" "$2" >>"$f"; fi
+}
+
 # ── Next.js ───────────────────────────────────────────────────────────────────
 # A JS/TS config without its comments, so "output: 'standalone'" mentioned in a
 # comment is not mistaken for a real setting. perl handles block comments; the
@@ -291,5 +298,5 @@ crm_http_code() { # crm_http_code <host> <path> [curl args...]
 }
 
 # ── remembered configuration (for `update`) ───────────────────────────────────
-CRM_STATE_SCALARS="CRM_ID CRM_REPO CRM_REF STORE STORE_NAME DOMAIN SCHEME API_HOST ADMIN_HOST SHOP_HOST STOREFRONT STOREFRONT_REPO STOREFRONT_REF STOREFRONT_DIR STOREFRONT_BUILD_CMD APP_USER"
+CRM_STATE_SCALARS="CRM_ID CRM_REPO CRM_REF STORE STORE_NAME DOMAIN SCHEME API_HOST ADMIN_HOST SHOP_HOST STOREFRONT STOREFRONT_REPO STOREFRONT_REF STOREFRONT_DIR STOREFRONT_BUILD_CMD APP_USER CRM_COMMIT PULSEDEPLOY_COMMIT"
 CRM_STATE_LISTS="STOREFRONT_BUILD_ENV STOREFRONT_RUNTIME_ENV"

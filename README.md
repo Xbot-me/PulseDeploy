@@ -345,6 +345,7 @@ CI examples that build and deploy automatically are in `examples/github-actions/
 | **Audit** | `sudo pulse-crm audit` or `sudo bash scripts/audit.sh [--no-perf]` | read-only: compares the live server with its tuning targets (settings, memory, cache hit rates, latency, hardening) ([docs](docs/auditing.md)) |
 | **Retune** | `sudo pulse-crm retune [--apply]` | applies hand-tuned values from `/etc/pulsedeploy/tuning.conf` (they survive re-runs) |
 | **Test data** | `sudo bash loadtest/seed/seed.sh --store loadtest --create-store` | fills a separate test store with realistic products, customers and orders (100k orders in ~10 s), and `--purge` removes it |
+| **Benchmark records** | `sudo pulse-lt seed / throttles / record / diff` | seeds the CRM's own test data, lifts the rate limits for a run, and records the server's side so two runs can be compared ([docs](docs/benchmarking.md)) |
 | **Load test** | `bash loadtest/run.sh ...` (from your PC, not the server) | human-like traffic: people log in once, think, click and leave. Profiles: smoke, average, peak, spike, soak, breakpoint ([docs](docs/load-testing.md)) |
 
 Seed first, then load-test: an empty database always looks fast. [docs/CRM-SCALING-FINDINGS.md](docs/CRM-SCALING-FINDINGS.md) records what that showed for the AvenTech CRM (order list and dashboard slow down sharply past about 10,000 orders).

@@ -505,6 +505,7 @@ lnx_setup_nginx() {
 # ── operations: CLI, backups, housekeeping ────────────────────────────────────
 lnx_install_pulse_cli() {
   install -m 0755 "$SCRIPT_DIR/bin/pulse" /usr/local/bin/pulse
+  install -m 0755 "$SCRIPT_DIR/bin/pulse-lt" /usr/local/bin/pulse-lt
   cat >"$LNX_ETC/pulse.conf" <<CONF
 # Written by the PulseDeploy installer; edit values here to change pulse behaviour.
 APP_USER=${APP_USER}
