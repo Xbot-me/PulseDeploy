@@ -64,6 +64,10 @@ case "$CASE" in
     "$LT" seed lt1 --profile small --seed 7 --as-of 2026-10-01 --reset --yes >/dev/null 2>&1 || no "valid seed failed"
     grep -q 'loadtest:seed lt1 --profile=small --seed=7 --json --as-of=2026-10-01 --reset --env=staging' "$T/log" || no "seed arguments wrong: $(cat "$T/log" 2>/dev/null)"
     grep -q '^APP_ENV=production' "$T/api/.env" || no "seeding must not change the server's own APP_ENV"
+    [[ "$(jq -r .status "$T/state/dataset.json" 2>/dev/null)" == seeded ]] || no "the dataset description was not saved by pulse-lt"
+    [[ "$(stat -c %a "$T/state/dataset.json")" == 600 ]] || no "dataset.json is not mode 600"
+    # shellcheck source=/dev/null
+    ( source "$LT"; trap - ERR; [[ "$(dataset_json | jq -r .status)" == seeded ]] ) || no "record would not pick up the saved description"
     ;;
   diff)
     mk() { jq -n --arg id "$1" --argjson conns "$2" --argjson p95 "$3" \
