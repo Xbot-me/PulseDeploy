@@ -231,6 +231,9 @@ def validate_scenario(scn):
     if not (isinstance(hosts, list) and hosts and all(isinstance(h, str) for h in hosts)):
         errors.append("\"hosts\" must be a non-empty list such as [\"api\", \"admin\"]")
         hosts = []
+    target = scn.get("target")
+    if target is not None and not (isinstance(target, dict) and re.fullmatch(r"https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/-]*)?", str(target.get("url", "")))):
+        errors.append("\"target\" must look like {\"url\": \"https://staging.example.com\"}")
     _check_think(scn.get("think"), "think", errors)
     session = scn.get("session", {})
     if not isinstance(session, dict):
@@ -280,14 +283,15 @@ def hosts_used(scn):
 
 
 if __name__ == "__main__":
-    # python3 humanlib.py FILE...   validate scenario files; prints "OK name hosts=a,b" or the problems
+    # python3 humanlib.py FILE...   validate scenario files; prints "OK name hosts=a,b [url=...]" or the problems
     import sys
 
     status = 0
     for target in sys.argv[1:]:
         try:
             scenario = load_scenario(target)
-            print(f"OK {scenario['name']} hosts={','.join(hosts_used(scenario))}")
+            url = scenario.get("target", {}).get("url", "")
+            print(f"OK {scenario['name']} hosts={','.join(hosts_used(scenario))}" + (f" url={url}" if url else ""))
         except (ScenarioError, OSError) as exc:
             print(f"BAD {exc}")
             status = 1
