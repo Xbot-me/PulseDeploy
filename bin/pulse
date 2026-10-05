@@ -237,6 +237,12 @@ prepare_api() { # prepare_api <dir> <base> <migrate> <composer>
   fi
   if [[ "$migrate" == "1" ]]; then
     (cd "$dir" && "$PHP_BIN" artisan migrate --force --no-interaction)
+    # Multi-tenant apps keep one database per store, and "migrate" only touches the central one: without
+    # this step an existing store never receives a later migration (new indexes, new columns).
+    if (cd "$dir" && "$PHP_BIN" artisan list --raw --no-interaction 2>/dev/null | grep -q '^tenants:migrate'); then
+      note "migrating the tenant databases"
+      (cd "$dir" && "$PHP_BIN" artisan tenants:migrate --no-interaction)
+    fi
   fi
   if ! (cd "$dir" && "$PHP_BIN" artisan storage:link --force --no-interaction >/dev/null 2>&1); then
     warn "storage:link did not run (older Laravel?); continuing"
