@@ -25,12 +25,31 @@ sudo bash crm.sh install \
    and the storefront (`npm ci && npm run build`, standalone output). Builds run as
    the unprivileged deploy user. Each deploy is an atomic release that rolls back by
    itself if the health check fails.
-4. **Creates the first store** and its admin login. The generated password goes to
-   `/root/pulsedeploy-crm-credentials.txt` (root only), never to the log.
+4. **Creates the first store** with the CRM's production command `store:provision`:
+   a strong random owner password (read from a root-owned temp file, never from the
+   command line, and deleted afterwards), no moderator or development accounts, and an
+   empty or starter catalog (`--catalog none|starter|demo`, default `starter` = departments
+   and variant attributes, no products; `demo` needs `--demo <slug>`; `--vertical` picks the
+   catalog profile). The command prints one JSON object that the installer reads. The
+   password goes to `/root/pulsedeploy-crm-credentials.txt` (root only), never to the log.
+   A store that already exists is left alone and its credentials are not rewritten. The
+   store slug must be 2 to 40 lower-case letters, digits and dashes, starting with a letter.
+   This needs a CRM at commit `bbaac45` or later.
 5. **Smoke-tests** the API, a real read of the store's database through the API, the admin
    (including a real login), the storefront, the scheduler timer and (with `--certbot`) the
    certificates. If **any** check fails the command lists exactly which, prints no success
    banner and exits non-zero, so CI and scripts notice. Fix the cause and re-run it.
+
+## A new gadget-shop client in one command
+
+```bash
+sudo bash crm.sh install --domain client.example --email you@example.com --certbot \
+  --storefront gadgets --store voltgadgets --store-name "Volt Gadgets" \
+  --admin-email owner@client.example --git-token-file /root/gh-token
+```
+
+`--storefront gadgets` is the storefront in the CRM repository (`storefront/`). The store slug is
+compiled into the admin and storefront builds, so one install serves one client.
 
 Re-running is safe: existing `.env` values are kept (`--reset-env` to overwrite),
 an existing store is left alone, and deployed releases are replaced only after a

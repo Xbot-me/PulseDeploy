@@ -267,6 +267,22 @@ crm_store_create() {
   return 1
 }
 
+# crm_artisan_json <php-bin> <artisan args...>
+# Runs artisan in the API release as the app user and keeps the two streams apart:
+# stdout (one JSON object) -> CRM_JSON_OUT, stderr -> CRM_JSON_ERR. Returns artisan's exit status.
+CRM_JSON_OUT=""; CRM_JSON_ERR=""
+crm_artisan_json() {
+  local php="$1" errf rc=0
+  shift
+  errf="$(mktemp /tmp/pulse-artisan-err.XXXXXX)"; chmod 666 "$errf"
+  CRM_JSON_OUT="$(crm_as_app env CRM_API_CURRENT="${CRM_API_CURRENT:-/var/www/api/current}" bash -c 'cd "$CRM_API_CURRENT" && errf="$1" && bin="$2" && shift 2 && exec "$bin" artisan "$@" 2>>"$errf"' _ "$errf" "$php" "$@")" || rc=$?
+  CRM_JSON_ERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f -- "$errf"
+  # the owner password must never reach a log, even in an error text
+  if [[ -n "${CRM_VARS[ADMIN_PASSWORD]:-}" ]]; then CRM_JSON_ERR="${CRM_JSON_ERR//"${CRM_VARS[ADMIN_PASSWORD]}"/***}"; fi
+  return "$rc"
+}
+
 # ── smoke tests ───────────────────────────────────────────────────────────────
 crm_http_code() { # crm_http_code <host> <path> [curl args...]
   local host="$1" path="$2"
