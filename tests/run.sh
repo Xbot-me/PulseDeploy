@@ -579,16 +579,16 @@ echo "── laravel-next: the app owns the whole storage tree"
   [[ "$sudo_probe" == ok ]] || { echo "app user cannot write storage/app" >&2; exit 1; }
 ); rc=$?
 if [[ $rc -eq 0 ]]; then ok "storage tree owned by the app user (or skipped without root)"; else bad "storage tree ownership"; fi
-echo "── pulse-lt: throttles, seed, record diff (fake artisan)"
-lt() { bash "$ROOT/tests/lt_case.sh" "$@"; }
-check "pulse-lt: throttles off/on restores .env byte for byte"   lt cycle
-check "pulse-lt: an existing LOADTEST_MODE line is restored"     lt keeps-existing-mode
-check "pulse-lt: refuses a CRM without LOADTEST_MODE, no change"  lt old-crm
-check "pulse-lt: seed validates, refuses the live store, passes options" lt seed
-check "pulse-lt: diff lists only what changed"                   lt diff
-check "pulse-lt: nginx percentiles come from new bytes only, per log" lt nginx
-check "pulse-lt: record attach replaces the load-generator results" lt attach
-check "pulse-lt: usage and bad input"                            lt usage
+echo "── pulse-bench: throttles, seed, record diff (fake artisan)"
+bench() { bash "$ROOT/tests/bench_case.sh" "$@"; }
+check "pulse-bench: throttles off/on restores .env byte for byte"   bench cycle
+check "pulse-bench: an existing LOADTEST_MODE line is restored"     bench keeps-existing-mode
+check "pulse-bench: refuses a CRM without LOADTEST_MODE, no change"  bench old-crm
+check "pulse-bench: seed validates, refuses the live store, passes options" bench seed
+check "pulse-bench: diff lists only what changed"                   bench diff
+check "pulse-bench: nginx percentiles come from new bytes only, per log" bench nginx
+check "pulse-bench: record attach replaces the load-generator results" bench attach
+check "pulse-bench: usage and bad input"                            bench usage
 check "seed.sh --help works"                          bash "$ROOT/loadtest/seed/seed.sh" --help
 check_not "seed.sh needs --store"                     bash "$ROOT/loadtest/seed/seed.sh" --dry-run
 check_not "seed.sh --no-data needs --create-store"    bash "$ROOT/loadtest/seed/seed.sh" --store t --no-data --dry-run
